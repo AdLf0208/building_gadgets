@@ -1,0 +1,16 @@
+[package]
+name = "horizon-buildinggadgets2"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Building Gadgets 2 for Horizon: the building gadget's horizontal row"
+# Ported from Building Gadgets 2 (Direwolf20-MC/BuildingGadgets2, MIT),
+# Minecraft Java 1.21.1 NeoForge. Local-only port.
+
+[lib]
+path = "mixins/buildinggadgets2/runtime.rs"
+
+[workspace]
+members = ["tools/audit"]
+resolver = "2"

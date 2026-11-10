@@ -1,0 +1,10 @@
+# Building Gadgets 2 slice 1 content: the building gadget item, its recipe,
+# creative tab and the upstream model/texture/lang (adapted to 26.3).
+# Licence: MIT (Direwolf20-MC/BuildingGadgets2) — local-only until publishing
+# is approved.
+id = "buildinggadgets2"
+name = "Building Gadgets 2"
+version = "1.3.9"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

@@ -1,0 +1,106 @@
+[mod]
+id = "buildinggadgets2"
+version = "0.1.0"
+priority = 100
+
+[compatibility]
+horizon_revision = "1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9"
+
+# The pure horizontal-row planner (standalone crate lib, injected as
+# `crate::game::buildinggadgets2`).
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "buildinggadgets2"
+source = "runtime.rs"
+
+# Game-side glue: the per-player selection/range, the inventory/placement
+# bridge and the command handlers.
+[[module]]
+id = "state"
+file = "crates/horizon-client/src/game.rs"
+name = "buildinggadgets2_state"
+source = "support.rs"
+
+# The content half is inside this bundle (`data/buildinggadgets2-content.hmod`, the built
+# `content/buildinggadgets2.hmod`): this writes it to `.horizon-cache/` and appends it to the
+# dev-mod list, so one `.hnmod` installs the gadget and the code. The registry keeps one file
+# per project, so a split port could not be listed; AE2 ships the same pattern.
+[[injection]]
+id = "embedded-content"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::mods::content_root"
+helper = "embedded_content.rs"
+bindings = [
+  { name = "root", ty = "&std::path::Path", value = "root" },
+  { name = "enabled", ty = "&std::collections::BTreeSet<String>", value = "enabled" },
+  { name = "dev", ty = "&[std::path::PathBuf]", value = "dev" },
+]
+
+# Declare the persisted item component before content loads.
+[[injection]]
+id = "component-types"
+hook = "component_types"
+hook_version = 1
+kind = "HEAD"
+helper = "components.rs"
+bindings = [
+  { name = "types", ty = "&mut Vec<String>", value = "types" },
+]
+
+# Wheel steps over the held gadget change its range (API 122), through the same
+# server command the chat fallback uses.
+[[injection]]
+id = "mouse-scrolling"
+hook = "mouse_scrolling"
+hook_version = 1
+kind = "HEAD"
+helper = "scroll.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "accumulated", ty = "[i32; 2]", value = "accumulated" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+# A right click with the building gadget on a block: sneak selects the block,
+# otherwise the clicked face's horizontal row is built.
+[[injection]]
+id = "use-on"
+hook = "use_item_on"
+hook_version = 1
+kind = "HEAD"
+helper = "use_on.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&ItemStack", value = "stack" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "claimed", ty = "&mut bool", value = "claimed" },
+]
+
+# Declare `/buildinggadgets2 range [n]`: the pin has no mod key bind or
+# scroll-wheel hook, so the documented replacement is a command.
+[[injection]]
+id = "register-command"
+hook = "register_commands"
+hook_version = 1
+kind = "HEAD"
+helper = "register.rs"
+bindings = [
+  { name = "commands", ty = "&mut Vec<NativeCommand>", value = "commands" },
+]
+
+# A player typed a command: claim `/buildinggadgets2 ...` and store the range.
+[[injection]]
+id = "perform-command"
+hook = "perform_command"
+hook_version = 1
+kind = "HEAD"
+helper = "perform.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "&NativeServerPlayer", value = "player" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "ran" },
+]
