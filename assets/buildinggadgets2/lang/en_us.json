@@ -1,0 +1,9 @@
+{
+  "item.buildinggadgets2.gadget_building": "Building Gadget",
+  "itemGroup.buildinggadgets2": "Building Gadgets 2",
+  "buildinggadgets2.modes.horizontal_row": "Horizontal Row",
+  "buildinggadgets2.tooltips.holdshift": "Hold Shift for details",
+  "buildinggadgets2.tooltips.mode": "Mode: %s",
+  "buildinggadgets2.tooltips.range": "Range: %d",
+  "buildinggadgets2.tooltips.blockstate": "Block: %s"
+}

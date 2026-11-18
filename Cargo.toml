@@ -1,0 +1,20 @@
+[package]
+# Port of Building Gadgets 2 1.3.9 (Direwolf20-MC/BuildingGadgets2, MIT, branch
+# 1.21.1 at 11cd2efb2719e480018a81cfe5a05bd087cb1388). Minecraft Java 1.21.1
+# NeoForge; the port targets Horizon 26.3 at the pin in horizon-mod.toml.
+# Clean-room Rust rewrite from the mod's behaviour (FINDINGS.md); local-only
+# until publishing is approved, publishable under MIT with this source.
+#
+# Cargo's name and version are not the mod's identity: horizon-mod.toml is.
+name = "buildinggadgets2"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Building Gadgets 2 for Horizon: the building gadget's horizontal row"
+publish = false
+
+[dependencies]
+# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod` command (the
+# launcher builds against its own copy of the same build). Any other registry dependency must be
+# pinned with `horizon-launcher native-lock .` before building.
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }

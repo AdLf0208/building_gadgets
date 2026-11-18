@@ -1,0 +1,27 @@
+id = "buildinggadgets2"
+name = "Building Gadgets 2"
+version = "0.2.0"
+description = """A port of Building Gadgets 2 for Horizon: the building gadget and its horizontal-row
+mode. Sneak + right click selects the clicked block's state; a plain right click builds that block's row
+away from the player, bounded by the tool range (1..15, set with /buildinggadgets2 range or the mouse
+wheel), skipping cells that are not replaceable, and paying one item of the block's kind per placed cell.
+The other seven modes, the anchor, undo, energy and the gadget screens are not ported yet."""
+authors = ["Direwolf20-MC", "AdLf0208"]
+# Licence of the original (MIT, Direwolf20-MC/BuildingGadgets2); the text and the
+# original copyright notice travel inside the package as LICENSE / LICENSE-NOTICE.md.
+# A native mod: Rust in src/, compiled by the launcher against the game build [native] pins,
+# beside data/ and assets/. The id is the resource namespace and the only identity: Cargo's
+# package name and version are not the mod's.
+api = "0.2"
+# "both" is the installation side, not the hook's: the gadget's builder runs on the server, and
+# the mouse-wheel range step is a client hook, so single player (an integrated server) and a
+# dedicated server both need the package.
+side = "both"
+# The one shared value every manifest carries ("May add blocks, items, mob effects and entity
+# types"): this mod declares the gadget item, its recipe/tab and its item component.
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
