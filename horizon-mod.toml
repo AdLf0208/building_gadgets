@@ -1,11 +1,13 @@
 id = "buildinggadgets2"
 name = "Building Gadgets 2"
-version = "0.2.0"
-description = """A port of Building Gadgets 2 for Horizon: the building gadget and its horizontal-row
-mode. Sneak + right click selects the clicked block's state; a plain right click builds that block's row
-away from the player, bounded by the tool range (1..15, set with /buildinggadgets2 range or the mouse
-wheel), skipping cells that are not replaceable, and paying one item of the block's kind per placed cell.
-The other seven modes, the anchor, undo, energy and the gadget screens are not ported yet."""
+version = "0.2.3"
+description = """A port of Building Gadgets 2 for Horizon: the building gadget with all eight of its modes.
+Sneak + right click selects the clicked block's state; a plain right click builds in the selected mode
+(build-to-me, vertical wall, vertical column, surface, horizontal wall, stairs, horizontal row or grid),
+bounded by the tool range (1..15, set with /buildinggadgets2 range or the mouse wheel) and by
+/buildinggadgets2 mode, skipping cells that are not replaceable, and paying one item of the block's kind
+per placed cell. /buildinggadgets2 placeontop toggles the PLACE_ON_TOP setting. The anchor, undo, energy,
+and the paste/rotate/cut/destruction/exchange gadgets and their screens are not ported yet."""
 authors = ["Direwolf20-MC", "AdLf0208"]
 # Licence of the original (MIT, Direwolf20-MC/BuildingGadgets2); the text and the
 # original copyright notice travel inside the package as LICENSE / LICENSE-NOTICE.md.
@@ -23,5 +25,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

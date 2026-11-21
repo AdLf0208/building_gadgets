@@ -1,10 +1,11 @@
 # Validation
 
 > **Historical (0.1.0, the retired `.hnmod` format).** The current package is the
-> SDK `.hmod` (0.2.0): its ladder, artifact and evidence are in
-> [`notes.md`](notes.md) → `## Migration to the SDK format` → *Verification*, with
-> the logs under `../_shared/evidence/buildinggadgets2/sdk-*.log`. The staged
-> `horizon.py` steps below no longer exist.
+> SDK `.hmod` (0.2.3): its ladder, artifact and evidence are in
+> [`notes.md`](notes.md) → `## Slice 2 — the mode family` and
+> `## Migration to the SDK format` → *Verification*, with the logs under
+> `../_shared/evidence/buildinggadgets2/sdk-*.log`. The staged `horizon.py` steps
+> below no longer exist.
 
 Validated on Linux with Rust 1.95.0 against the exact revisions in
 `compatibility.json` (Horizon `c9d474d`, horizon-mixins `d9c83d7`), 2026-11-05.
@@ -85,3 +86,29 @@ Evidence: `ports/_shared/evidence/buildinggadgets2/` (`ladder-embed.log`,
 `e2e-embedded.log`, `e2e-embedded-selftest.log`, `check-native.log`,
 `package-embed.log`).
 
+
+## 2026-11-21 — slice 2, the mode family (0.2.3)
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** + horizon-mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`; `.horizon/sdk` deleted and refetched so the cached SDK
+matches the new pin (the measured trap). Every step ran through `ports/tools/build-slot.sh`
+(`BUILD_LOCAL=1`, `CARGO_INCREMENTAL=0`), logs in `../_shared/evidence/buildinggadgets2/`.
+
+| Check | Result |
+|---|---|
+| `cargo test` | **30 passed**, 0 failed (`sdk-test.log`); the 11 new mode tests were red first (`sdk-test-red.log`, 19 passed / 11 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | exit 0 (`sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **37,953 B**, sha256 `eed5258a64b413a462c28416fb14f17e64e4459f29bda97e5e7c44766d169920`, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check buildinggadgets2.hmod` | `buildinggadgets2 0.2.3 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, 37,801 bytes, exit 0 (`sdk-check.log`) |
+| `cargo horizon-mod fits --build 0a875da` | `0a875da  made for`, exit 0 (`sdk-fits.log`) |
+| `cargo horizon-mod fits --build 0b14f8a` | `0b14f8a  fits`, exit 0 (`sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| `tools/e2e.sh` (`--offscreen`) | recipe + 9 mode phases: `PASS` + `EXIT:0` (`buildinggadgets2-e2e/e2e-modes.log`) |
+| `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | 9/9 phase assertions rejected the wrong expectation, `FAIL` + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | logs=5 ok=5 |
+
+The in-game leg asserts the exact placed cell set per mode (from the upstream Java, not the port's
+planner), one stone consumed per cell, the parsed action-bar replies of `mode`/`range`/`placeontop`/
+status, and the carried recipe's output and ingredient consumption with a missing-lapis control.

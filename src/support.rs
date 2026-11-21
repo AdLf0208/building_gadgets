@@ -9,13 +9,13 @@
 //! `notes.md` under `## Migration to the SDK format`.
 
 use mod_api::{
-    BlockMetadata, BlockState, BlockUpdateFlags, ClientHost, Command, CommandArgumentValue,
-    CommandInvocation, CommandSource, Component, Flow, Hand, HostBlockStates, HostSide,
-    InteractionResult, ItemKey, ItemPart, ItemStack, LevelRef, MouseScrollingEvent, PlayerRef,
-    RunModCommandEvent, ServerHost, Tag, Text, UseOnEvent,
+    BlockFace, BlockMetadata, BlockState, BlockUpdateFlags, ClientHost, Command,
+    CommandArgumentValue, CommandInvocation, CommandSource, Component, Dist, Flow, Hand, Host,
+    HostBlockStates, HostSide, InteractionResult, ItemKey, ItemPart, ItemStack, LevelRef,
+    MouseScrollingEvent, PlayerRef, RunModCommandEvent, ServerHost, Tag, Text, UseOnEvent,
 };
 
-use crate::runtime::{self, Command as GadgetCommand, DEFAULT_RANGE, MAX_RANGE};
+use crate::runtime::{self, DEFAULT_RANGE, GadgetCommand, MAX_RANGE, Mode, PlayerView};
 
 /// The persisted state component, upstream's `GadgetNBT` payload on the stack.
 pub const COMPONENT: &str = "buildinggadgets2:gadget_state";
@@ -36,6 +36,10 @@ pub struct GadgetState {
     pub range: u32,
     /// The block state a sneak click selected.
     pub selected: Option<String>,
+    /// The active mode, upstream's `GADGET_MODE` component.
+    pub mode: Mode,
+    /// Upstream's `PLACE_ON_TOP` toggle.
+    pub place_on_top: bool,
 }
 
 impl Default for GadgetState {
@@ -43,6 +47,8 @@ impl Default for GadgetState {
         Self {
             range: DEFAULT_RANGE,
             selected: None,
+            mode: runtime::DEFAULT_MODE,
+            place_on_top: false,
         }
     }
 }
@@ -89,14 +95,31 @@ fn read_state(stack: &ItemStack) -> GadgetState {
         Tag::String(value) => Some(value.to_string_lossy()),
         _ => None,
     });
-    GadgetState { range, selected }
+    let mode = tag
+        .get("mode")
+        .and_then(|tag| match tag {
+            Tag::String(value) => Mode::from_id(&value.to_string_lossy()),
+            _ => None,
+        })
+        .unwrap_or(runtime::DEFAULT_MODE);
+    let place_on_top = matches!(tag.get("place_on_top"), Some(Tag::Byte(1)));
+    GadgetState {
+        range,
+        selected,
+        mode,
+        place_on_top,
+    }
 }
 
 /// Write the state into a stack's component patch. A write the stack refuses (an
 /// item whose components cannot take it) leaves the gadget as it was.
 fn write_state(stack: &mut ItemStack, state: &GadgetState) {
     let range = i32::try_from(state.range).unwrap_or(i32::from(u8::MAX));
-    let mut entries = vec![("range", Tag::Int(range))];
+    let mut entries = vec![
+        ("range", Tag::Int(range)),
+        ("mode", Tag::String(state.mode.id().into())),
+        ("place_on_top", Tag::Byte(i8::from(state.place_on_top))),
+    ];
     if let Some(selected) = &state.selected {
         entries.push(("selected", Tag::String(selected.as_str().into())));
     }
@@ -219,17 +242,44 @@ fn take_items(host: &mut dyn ServerHost, player: PlayerRef, item: ItemKey, count
 /// for *its own* blocks, so a port can no longer ask another block's answer; the gap
 /// is in `notes.md`. Placing through `LevelRef::set_block` is what `/setblock` does,
 /// and the game's own shape updates drop a state that cannot stay.
+///
+/// Every destination also passes the gate vanilla applies to the player's own placement
+/// ([`runtime::may_edit`]): the clicked block was checked by the game, but the row runs past
+/// it, and `LevelRef::set_block` itself checks residency and height only. Without this a
+/// permitted click could place a row across a spawn-protection boundary or out of the border.
 struct LevelWorld<'a> {
     host: &'a mut dyn ServerHost,
     level: LevelRef,
+    rights: runtime::EditRights,
 }
 
 impl runtime::World for LevelWorld<'_> {
     fn can_place(&mut self, pos: [i32; 3]) -> bool {
+        if !runtime::may_edit(pos, &self.rights) {
+            return false;
+        }
         let Some(existing) = self.level.block_state(self.host, pos) else {
             return false;
         };
         self.host.block_states().replaceable(existing) == Some(true)
+    }
+
+    /// `Surface`'s rule: the block behind a candidate must be the clicked block's
+    /// state. The state string is the codec-faithful identity the selection stores.
+    fn same_state(&mut self, a: [i32; 3], b: [i32; 3]) -> bool {
+        let Some(one) = self.level.block_state(self.host, a) else {
+            return false;
+        };
+        let Some(two) = self.level.block_state(self.host, b) else {
+            return false;
+        };
+        match (
+            self.host.block_state_string(one),
+            self.host.block_state_string(two),
+        ) {
+            (Some(one), Some(two)) => one == two,
+            _ => false,
+        }
     }
 }
 
@@ -271,6 +321,71 @@ fn place(
     }
 }
 
+/// The player's right to build at a destination: the inputs of [`runtime::may_edit`]. Every
+/// unreadable answer refuses, so a stale handle never places.
+fn edit_rights(
+    host: &dyn ServerHost,
+    player: PlayerRef,
+    level: LevelRef,
+    stack: &ItemStack,
+    clicked: [i32; 3],
+    face: [i32; 3],
+) -> runtime::EditRights {
+    let dedicated = host.dist() == Dist::DedicatedServer;
+    let view: &dyn Host = host;
+    let in_overworld = level
+        .dimension()
+        .id(view)
+        .is_some_and(|id| id == "minecraft:overworld");
+    runtime::EditRights {
+        may_build: player.may_build(view).unwrap_or(false),
+        // Asked where the click landed, not at a made-up position: the engine resolves the
+        // position and answers None for one it cannot place in, which refuses.
+        may_use_at: player
+            .may_use_item_at(view, clicked, block_face(face), stack)
+            .unwrap_or(false),
+        // `WorldBorder.isWithinBounds` is checked per destination in
+        // [`runtime::may_edit`]; the border is the level's own.
+        border: level.world_border(view),
+        dedicated,
+        op: player.permission_level(view).unwrap_or(0) >= runtime::LEVEL_ADMINS,
+        spawn_protection: if dedicated {
+            spawn_protection_radius(host)
+        } else {
+            0
+        },
+        spawn: level.respawn_data(view).map(|data| data.pos),
+        in_overworld,
+    }
+}
+
+/// A runtime face as the game's `BlockFace`.
+const fn block_face(face: [i32; 3]) -> BlockFace {
+    match face {
+        [0, -1, 0] => BlockFace::Down,
+        [0, 1, 0] => BlockFace::Up,
+        [0, 0, -1] => BlockFace::North,
+        [0, 0, 1] => BlockFace::South,
+        [-1, 0, 0] => BlockFace::West,
+        _ => BlockFace::East,
+    }
+}
+
+/// The server's `spawn-protection`, read beside the world directory (the server root on a
+/// dedicated server). A file or key it does not carry falls back to vanilla's 16.
+fn spawn_protection_radius(host: &dyn ServerHost) -> i32 {
+    let Some(root) = host
+        .world_dir()
+        .and_then(|dir| dir.parent().map(std::path::Path::to_path_buf))
+    else {
+        return runtime::VANILLA_SPAWN_PROTECTION;
+    };
+    match std::fs::read_to_string(root.join("server.properties")) {
+        Ok(text) => runtime::spawn_protection_from(&text),
+        Err(_) => runtime::VANILLA_SPAWN_PROTECTION,
+    }
+}
+
 /// A right click with the gadget on a block: a sneak click selects the clicked
 /// state, a plain click builds the selected state's row. The click is claimed in
 /// both cases, as upstream cancels the interaction.
@@ -294,6 +409,8 @@ fn use_on_block(
         let selected = GadgetState {
             range: state.range,
             selected: Some(text),
+            mode: state.mode,
+            place_on_top: state.place_on_top,
         };
         if !write_held(host, player, &selected) {
             return None;
@@ -307,21 +424,37 @@ fn use_on_block(
     if item.id(host) == "minecraft:air" {
         return None;
     }
-    let facing = u32::try_from(event.player_entity_id)
+    let entity = u32::try_from(event.player_entity_id)
         .ok()
-        .and_then(|id| host.entity(id))
-        .and_then(|entity| entity.rotation(host))
+        .and_then(|id| host.entity(id))?;
+    let facing = entity
+        .rotation(host)
         .map(|[yaw, _pitch]| runtime::facing_from_yaw(yaw))
         .unwrap_or([0, 0, 1]);
+    let position = entity.position(host).unwrap_or([0.0, 0.0, 0.0]);
+    let view = PlayerView {
+        block: entity.block_position(host).unwrap_or([0, 0, 0]),
+        y: position[1],
+        eye_y: position[1] + entity.eye_height(host).unwrap_or(1.62),
+    };
     let cells = {
-        let mut world = LevelWorld { host, level };
+        let rights = edit_rights(host, player, level, event.stack, event.pos, event.face);
+        let mut world = LevelWorld {
+            host,
+            level,
+            rights,
+        };
         runtime::plan(
             &mut world,
-            event.pos,
-            event.face,
-            facing,
-            false,
-            state.range,
+            state.mode,
+            &runtime::BuildRequest {
+                clicked: event.pos,
+                face: event.face,
+                facing,
+                player: view,
+                place_on_top: state.place_on_top,
+                range: state.range,
+            },
         )
     };
     place(host, player, level, &cells, place_state, item);
@@ -354,11 +487,17 @@ pub fn declare_component(types: &mut Vec<String>) {
     types.push(COMPONENT.to_owned());
 }
 
-/// Declare the `/buildinggadgets2` usages: the range control, and the usage line.
+/// Declare the `/buildinggadgets2` usages: the range and mode controls, the
+/// place-on-top setting, and the usage lines. The radial mode wheel is a client
+/// screen this slice does not port, so the mode is named on the command line.
 pub fn declare_commands(commands: &mut Vec<Command>) {
     commands.push(Command::new("buildinggadgets2"));
     commands.push(Command::new("buildinggadgets2 range"));
     commands.push(Command::new("buildinggadgets2 range <range:integer>"));
+    commands.push(Command::new("buildinggadgets2 mode"));
+    commands.push(Command::new("buildinggadgets2 mode <mode:word>"));
+    commands.push(Command::new("buildinggadgets2 placeontop"));
+    commands.push(Command::new("buildinggadgets2 placeontop <state:word>"));
 }
 
 /// Rebuild the line the runtime's parser reads from the dispatcher's parsed command:
@@ -417,7 +556,12 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 .selected
                 .as_deref()
                 .and_then(|text| selected_name(host, text));
-            let line = runtime::status_reply(state.range, selected.as_deref());
+            let line = runtime::status_reply(
+                state.mode,
+                state.range,
+                selected.as_deref(),
+                state.place_on_top,
+            );
             reply(host, player, line);
         }
         GadgetCommand::SetRange(value) => {
@@ -437,18 +581,78 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 );
                 return Flow::Cancel;
             };
+            let current = read_state(&gadget.1);
             let state = GadgetState {
                 range: value,
-                selected: read_state(&gadget.1).selected,
+                selected: current.selected,
+                mode: current.mode,
+                place_on_top: current.place_on_top,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_range_reply(value));
+        }
+        GadgetCommand::SetMode(mode) => {
+            let Some(player) = player else {
+                reply(
+                    host,
+                    None,
+                    "Hold the building gadget to set its mode".to_owned(),
+                );
+                return Flow::Cancel;
+            };
+            let Some(gadget) = held_gadget(host, player) else {
+                reply(
+                    host,
+                    Some(player),
+                    "Hold the building gadget to set its mode".to_owned(),
+                );
+                return Flow::Cancel;
+            };
+            let current = read_state(&gadget.1);
+            let state = GadgetState {
+                range: current.range,
+                selected: current.selected,
+                mode,
+                place_on_top: current.place_on_top,
+            };
+            write_held(host, player, &state);
+            reply(host, Some(player), runtime::set_mode_reply(mode));
+        }
+        GadgetCommand::SetPlaceOnTop(enabled) => {
+            let Some(player) = player else {
+                reply(
+                    host,
+                    None,
+                    "Hold the building gadget to change its settings".to_owned(),
+                );
+                return Flow::Cancel;
+            };
+            let Some(gadget) = held_gadget(host, player) else {
+                reply(
+                    host,
+                    Some(player),
+                    "Hold the building gadget to change its settings".to_owned(),
+                );
+                return Flow::Cancel;
+            };
+            let current = read_state(&gadget.1);
+            let state = GadgetState {
+                range: current.range,
+                selected: current.selected,
+                mode: current.mode,
+                place_on_top: enabled,
+            };
+            write_held(host, player, &state);
+            reply(host, Some(player), runtime::set_place_on_top_reply(enabled));
         }
         GadgetCommand::Invalid => {
             reply(
                 host,
                 player,
-                format!("Usage: /buildinggadgets2 range <1-{MAX_RANGE}>"),
+                format!(
+                    "Usage: /buildinggadgets2 range <1-{MAX_RANGE}> | mode <{}> | placeontop <on|off>",
+                    Mode::ALL.map(Mode::path).join("|")
+                ),
             );
         }
     }

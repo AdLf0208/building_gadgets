@@ -1,19 +1,19 @@
-//! Building Gadgets 2 for Horizon — slice 1, the building gadget's horizontal row.
+//! Building Gadgets 2 for Horizon — the building gadget and its eight modes.
 //!
 //! Building Gadgets 2 (see `FINDINGS.md`) gives one item, the building gadget: a
 //! sneak right click stores the clicked block in the gadget, a plain right click then
-//! builds that block's row away from the player, one item of the block's kind per
-//! placed cell.
+//! builds that block's selected mode, one item of the block's kind per placed cell.
 //!
 //! The gadget's own settings live in its item component
 //! (`buildinggadgets2:gadget_state`), exactly where upstream keeps them, so they
-//! travel with the stack.
+//! travel with the stack: the range, the selection, the mode and the
+//! `place_on_top` toggle.
 //!
-//! [`runtime`] is the pure planner and command parser (byte-identical to the
-//! pre-migration file, and unit-tested on its own); [`support`] is the glue that
-//! reads the world, the inventory and the component, and writes the blocks. This
-//! file is the one `impl Hooks`: the item part that answers a right click, the
-//! declared component, the command and the mouse wheel.
+//! [`runtime`] is the pure planner and command parser (one collector per upstream
+//! mode, unit-tested on its own); [`support`] is the glue that reads the world, the
+//! inventory and the component, and writes the blocks. This file is the one
+//! `impl Hooks`: the item part that answers a right click, the declared component,
+//! the commands and the mouse wheel.
 
 pub mod runtime;
 pub mod support;

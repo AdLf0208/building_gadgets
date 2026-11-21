@@ -4,13 +4,16 @@ Ported from **Building Gadgets 2** (`Direwolf20-MC/BuildingGadgets2`, **MIT**)
 for Minecraft Java 1.21.1 NeoForge. Local-only until the maintainer approves
 publishing (ARCHITECTURE.md §8).
 
-Status: `ported-partial` — **slice 1 (horizontal row)** implemented: one
-building gadget, sneak-click block selection, a row of the selected block away
-from the player, range 1..15, one item consumed per placed block. The other
-seven modes, the anchor, undo, energy, the GUI/tooltip, bound inventories and
-the build animation are later slices.
+Status: `ported-partial` — **slice 2 (the mode family)** implemented: one building
+gadget, sneak-click block selection, and all eight of upstream's building modes
+(`build_to_me` by default, `vertical_wall`, `vertical_column`, `surface`,
+`horizontal_wall`, `stairs`, `horizontal_row`, `grid`), selected with
+`/buildinggadgets2 mode <name>`, range 1..15, `place_on_top`, one item consumed per
+placed block. The anchor, undo, energy, bound inventories, the mode wheel and the
+GUI/tooltip, and the other gadgets (paste/rotate/cut/destruction/exchange) are
+later slices.
 
-**Version 0.2.0 — the SDK package.** This port was migrated on 2026-11-18 from
+**Version 0.2.0 — the SDK package (history).** This port was migrated on 2026-11-18 from
 the retired `.hnmod` container to the flat SDK `.hmod` (Horizon's mod-API merge,
 #16941): one file carries the code (`src/`) **and** the carried content
 (`assets/`, `data/`), instead of an `.hnmod` with a content `.hmod` embedded in
@@ -18,6 +21,107 @@ the retired `.hnmod` container to the flat SDK `.hmod` (Horizon's mod-API merge,
 (sha256 `069556ad84ac040bdb945027feb225f80d10222f0a62f78970b59bdc266303f2`),
 tests included. The migration recipe, the file map and every trap are in
 [`## Migration to the SDK format`](#migration-to-the-sdk-format).
+
+## Slice 2 — the mode family (2026-11-21, version 0.2.3)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Gaps (current)`: "**Mode fixed to `horizontal_row`** (upstream's default is
+`build_to_me`); the other modes, mode switching (the wheel is client-only) … are later slices."
+
+**What shipped.** All eight modes `GadgetModes.setupDefaultModes` registers for the building gadget,
+each translated from its own class in `util/modes/`:
+
+| Mode | Upstream class | Rule as translated |
+|---|---|---|
+| `build_to_me` (default) | `BuildToMe` | cells strictly between the clicked block and the player along the face's axis, capped at 32 |
+| `vertical_wall` | `VerticalWall` | a wall across the face's perpendicular horizontal axis and ±range/2 vertically |
+| `vertical_column` | `VerticalColumn` | along the clicked face on a top/bottom face; ±range/2 up and down on a side face |
+| `surface` | `Surface` | the square one block past the face, kept where the block behind is the clicked block's state |
+| `horizontal_wall` | `HorizontalWall` | a square on a top/bottom face; on a side face a wall along the face, ±range/2 sideways |
+| `stairs` | `Stairs` | a staircase stepping away from the face (or the facing), climbing or descending with the player |
+| `horizontal_row` | `HorizontalRow` | the 0.1.0 row, unchanged |
+| `grid` | `Grid` | a lattice on the clicked plane, spacing `((range+1-2) % 6) + 2`, bound `(range+1)*7/5` |
+
+The default is upstream's `build_to_me` (`GadgetNBT.getMode` searches for that id first), so a fresh
+gadget now builds between the click and the player instead of a row.
+
+**Selection.** The radial mode wheel is a client screen and is not ported. The mode is named on the
+command line — `/buildinggadgets2 mode <name>`, accepting the full id (`buildinggadgets2:stairs`) or the
+path (`stairs`) — and the `PLACE_ON_TOP` toggle with `/buildinggadgets2 placeontop on|off`. Both live in
+the same `buildinggadgets2:gadget_state` component (`mode`, `place_on_top`) beside the range and the
+selection, so they travel with the stack. `/buildinggadgets2` now reports mode, range, block and
+place-on-top.
+
+**Upstream quirks kept, and why.** `HorizontalWall` gates a side-face column on its **centre** cell: a
+blocked centre skips the whole column, even when its sides are free (`horizontal_wall` test
+`horizontal_wall_skips_a_column_whose_centre_is_blocked`). `Stairs` uses its own sign rule
+(`EAST`/`SOUTH` → −1), the opposite of `MagicHelpers.invertOnFace`, so it steps *away* from the click
+where the wall grows *toward* it; both are pinned by tests. These are design quirks, not defects, so the
+port reproduces them and the e2e asserts the resulting cells.
+
+**Red → green.** The 11 new mode tests were run against a dispatch stub whose new arms answered
+`Vec::new()` — 19 passed, 11 failed, e.g.
+
+```
+---- runtime::tests::grid_lays_a_lattice_on_the_clicked_plane stdout ----
+thread 'runtime::tests::grid_lays_a_lattice_on_the_clicked_plane' panicked at src/runtime.rs:1096:9:
+assertion `left == right` failed
+  left: []
+ right: [[-6, 100, -6], [-6, 100, 0], [-6, 100, 6], [0, 100, -6], [0, 100, 6], [6, 100, -6], [6, 100, 0], [6, 100, 6]]
+test result: FAILED. 19 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+(`ports/_shared/evidence/buildinggadgets2/sdk-test-red.log`, `EXIT:101`.) The eight collectors then made
+them pass: **30 passed, 0 failed**.
+
+**In-game leg.** `tools/e2e.sh`, one `--offscreen` launch: the carried recipe is crafted in a real
+crafting table (and the same pattern without lapis matches nothing), then one phase per mode. Each phase
+asserts the **exact cell set** the click placed (derived from the Java, not from the port) and one stone
+consumed per placed cell, and the command replies are read from the action bar. `SELFTEST=1` gives every
+phase one cell too many and carries on, so one run proves **all nine** phase assertions reject a wrong
+expectation.
+
+### Coverage — every family in the jar
+
+| Family | Status |
+|---|---|
+| `build_to_me` | tested — phase `build_to_me`, 3 cells at `z=1..3`, 3 stone |
+| `vertical_wall` | tested — phase `vertical_wall`, 24 cells (5×5 minus the clicked one), 24 stone |
+| `vertical_column` | tested — phase `vertical_column`, 4 cells around the click, 4 stone |
+| `surface` | tested — phase `surface`, the single backed cell `(0,150,1)`, 1 stone |
+| `horizontal_wall` | tested — phase `horizontal_wall` (range 3), 3×3 cells, 9 stone |
+| `stairs` | tested — phase `stairs`, 4 rising cells, 4 stone |
+| `horizontal_row` | tested — phase `horizontal_row`, 4 cells, 4 stone |
+| `grid` | tested — phase `grid` (8 cells) and `grid_on_top` (9 cells one block up) |
+| `place_on_top` | tested — `grid_on_top` and the `horizontal_wall` top-face unit test |
+| mode selection + status | tested — `mode`/`range`/`placeontop`/status replies asserted in the log |
+| carried recipe | tested — crafted in a table; ingredients consumed; missing-lapis control empty |
+| gadget item | tested — crafted, given, selected, held; unknown in the control game |
+| stone block | placed and read back in every phase; the clicked block is never replaced |
+| anchor, undo, energy | not ported — no anchor/undo list and no FE hook on the gadget |
+| preview, per-tick queue, retry | not ported — placement is immediate (see the gaps) |
+| bound inventory / AE2 / Curios | not ported — payment walks the main inventory |
+| mode wheel, GUI, tooltip | not ported — the mode is a command; the screen is client work |
+| paste/rotate/cut/destruction/exchange gadgets | not ported — later slices |
+
+### Verification (0.2.3)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **30 passed**, 0 failed (`sdk-test.log`) |
+| `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | exit 0 (`sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **37,953 B**, sha256 `eed5258a…9920`, `cmp` identical |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.3 (native-mod, format native-1/0a875da…, for 26.3)`, exit 0 |
+| `fits --build 0a875da` | `0a875da  made for` (`sdk-fits.log`) |
+| `fits --build 0b14f8a` | `0b14f8a  fits` (`sdk-fits-other.log`) — a different build, so the pin run is not a tautology |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| e2e (modded) | `PASS` + `EXIT:0`, recipe + 9 mode phases (`e2e-modes.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` |
+| e2e (`SELFTEST=1`) | 9/9 phase assertions rejected, `FAIL` + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 5/5 |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
 
 ## Behaviour implemented (slice 1)
 
@@ -496,7 +600,7 @@ Removed into `ports/_shared/evidence/buildinggadgets2/retired-hnmod-0.1.0/`
   retry on a failed `canSurvive`) is a behaviour slice of its own, not a substrate
   the migration removed. The gap list below records it as such.
 
-### Gaps (current, 0.2.0)
+### Gaps (current, 0.2.3)
 
 - **`canSurvive` is no longer pre-checked.** 0.1.0 asked the game's own
   `behaviours.can_survive(level, ticks, at, state)` before placing; at this pin
@@ -508,9 +612,10 @@ Removed into `ports/_shared/evidence/buildinggadgets2/retired-hnmod-0.1.0/`
   behaves — where 0.1.0 skipped the cell. **Issue shape:** *"A host query for
   `BlockState.canSurvive(state, pos)` (the answer the game's own placement tests),
   so a builder can skip a cell instead of writing and losing it."*
-- **Mode fixed to `horizontal_row`** (upstream's default is `build_to_me`); the
-  other modes, mode switching (the wheel is client-only), the anchor, undo, the
-  paste/rotate/cut/destruction/exchange gadgets and their screens are later slices.
+- **Mode wheel not ported.** All eight modes exist and are selected with
+  `/buildinggadgets2 mode <name>` (the radial menu that opens them upstream is a
+  client screen). The other gadgets' modes (paste, cut, exchanges) are their own
+  slices.
 - **Selection stores the whole state string**, so transient properties (age, lit,
   waterlogged, open, …) are not cleaned as upstream's `cleanBlockState` does;
   orientation properties are preserved. (0.1.0 stored the numeric state id, which
@@ -518,11 +623,14 @@ Removed into `ports/_shared/evidence/buildinggadgets2/retired-hnmod-0.1.0/`
 - **Placement is immediate**: no preview, no per-tick queue, no retry pass for
   supports placed later, no `BlockItem.place` / `setPlacedBy`, block-entity data of
   the placed state is not carried, no sound or particles.
-- **No energy** (upstream also charges 50 FE/block; slice 1 pays items only).
-- No bound inventory / AE2 / Curios sourcing, `place_on_top` toggle, connected-area
-  fill, GUI/tooltip, or chunk protection. `PlayerRef::player_may_use_item_at`
-  *does* exist at this pin (`mayInteract`), so the protection check is now
-  implementable — added behaviour, left to a later slice.
+- **No energy** (upstream also charges 50 FE/block; the port pays items only).
+- **No anchor and no undo.** Upstream's anchor block (build around a bound anchor
+  instead of the click) and its undo list (restore the replaced states and refund
+  the items) are not ported; placement does not remember what it replaced.
+- No bound inventory / AE2 / Curios sourcing, connected-area fill, or GUI/tooltip.
+  Chunk protection is covered by the per-cell `may_edit` gate (player build
+  permission, `mayUseItemAt`, the world border and a dedicated server's
+  spawn-protection radius); a mod's own protection hook has no pin query.
 - Payment walks the main inventory explicitly, so it **does** see component-bearing
   stacks (the old `native_count_items` did not); that is a fix, not a gap.
 
@@ -629,3 +737,67 @@ Skills: superpowers/using-superpowers, brainstorming, writing-plans, test-driven
 > regression: the SDK exposes `canSurvive` only as a hook a mod answers for its own
 > blocks, so a cell is no longer pre-checked against it (see `notes.md`).
 > Licence: MIT, with the original notice inside the package.
+
+## Review fixes (2026-11-18 review, rebuilt 2026-11-19 at 0.2.1)
+
+Skills: superpowers/using-superpowers, systematic-debugging, test-driven-development, verification-before-completion; BeautifulRust/rust-best-practices, rust-port
+
+**Finding (`src/support.rs:259`).** Every row cell was written through `LevelRef::set_block`, which
+checks residency and height only; the game checks spawn protection and the border at the *clicked*
+block, so a permitted click could build across a protected boundary.
+
+**Fix.** `runtime::EditRights` + `runtime::may_edit`/`spawn_protected`/`inside_border`/
+`spawn_protection_from` are the gate `ServerLevel.mayInteract` applies to a player's own placement;
+`LevelWorld::can_place` now asks it **per destination** (build permission, `mayUseItemAt`, the world
+border at the cell, and a dedicated server's `spawn-protection` radius around the shared spawn, with
+`LEVEL_ADMINS` exempt). A protected cell is skipped like any other invalid cell, so the row stops
+short of it instead of crossing it.
+
+**Tests (red before the fix, green after).** `runtime::tests::{an_unprotected_row_cell_is_buildable,
+a_player_who_may_not_build_is_refused, a_cell_outside_the_border_is_refused,
+a_dedicated_servers_spawn_protection_is_enforced_per_cell, the_spawn_protection_radius_is_the_servers_own}`
+— the four refusal tests were run against a stub `may_edit -> true` first and failed there.
+
+**Ladder (0.2.1).** `cargo test` 16 passed · `cargo clippy --all-targets -- -D warnings` exit 0 ·
+`cargo fmt --check` exit 0 · `cargo horizon-mod build` twice → identical sha256 · `check` exit 0
+(`buildinggadgets2 0.2.1 … for 26.3`) · `fits --build 0b14f8a` → `0b14f8a made for`, exit 0.
+
+**In game.** `launcher-game.sh run buildinggadgets2` → `PASS` + `E2E EXIT:0` (5 blocks placed, 5 stone
+spent); `GAME=$CONTROL_GAME` → `FAIL: the package did not provide buildinggadgets2:gadget_building` +
+`EXIT:1`. Evidence: `ports/_shared/evidence/buildinggadgets2-e2e/`.
+
+**Package.** `buildinggadgets2.hmod` **31,390 B**, sha256
+`46970fcf90e47aaa875e9173f5ecf6529597a5f5885e4bff075aedfe4c3aa4b6`.
+
+## In-game leg repair (2026-11-19, version 0.2.2)
+
+Skills: superpowers/using-superpowers, systematic-debugging, verification-before-completion; BeautifulRust/rust-best-practices, rust-port
+
+`runtime::may_edit`'s `mayUseItemAt` input was asked at `[0, 0, 0]` instead of the clicked cell; the
+engine resolves that position against the level and answers `None` for one it cannot place in, which
+refused the placement. Found while the redstonepen leg hit the same latent bug. It now asks at
+`event.pos`. No behaviour change in the ladder; the row still places and pays.
+
+**Legs (0.2.2).** modded `PASS` + `EXIT:0` (5 placed, 5 stone spent); control `EXIT:1`.
+`check-e2e-logs.py buildinggadgets2-e2e --strict` → 2/2. `cargo test` 16 · clippy 0 · fmt 0 · two
+builds byte-identical · `check`/`fits` exit 0.
+
+**Package.** `buildinggadgets2.hmod` **31,461 B**, sha256
+`de10c06860205d2d70c7bd93e5901aa1809a298043721be181d2d9079282b3cb`.
+
+## Changelog (0.2.3) — slice 2, the mode family
+
+> **Building Gadgets 2 0.2.3** — the building gadget now has all eight modes
+> upstream registers: `build_to_me` (the new default, as upstream), `vertical_wall`,
+> `vertical_column`, `surface`, `horizontal_wall`, `stairs`, `horizontal_row` and
+> `grid`, each translated from its own `util/modes/*.java` class and pinned by unit
+> tests plus an in-game phase asserting the exact cells and the stone consumed.
+> `/buildinggadgets2 mode <name>` selects a mode (the radial wheel is a client
+> screen, so the command stands in for it) and `/buildinggadgets2 placeontop on|off`
+> toggles `PLACE_ON_TOP`; both live in the gadget's `buildinggadgets2:gadget_state`
+> component with the range and selection. Grouped modes change with the click's face
+> and the player's facing exactly as upstream's collectors do, including upstream's
+> centre-cell gate for `horizontal_wall` and its own sign rule for `stairs`. The
+> package re-pins to Nightly `0a875da` (mixins `e59da909`). Known gaps are otherwise
+> unchanged: no anchor or undo, no preview/animation queue, no energy, no bound
+> inventories, no mode wheel or GUI, and the other gadgets are later slices.
