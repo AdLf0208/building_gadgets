@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# In-game check for Building Gadgets 2 — the held build and the world-border edges.
+# In-game check for Building Gadgets 2 — the held build, the `buildinggadgets2:deny` tag and the
+# world-border edges.
 #
 # One launch: the carried gadget recipe is crafted in a real crafting table (with
 # a missing-ingredient control), then one phase per mode the building gadget
@@ -19,6 +20,18 @@
 # destination cell and one cell further out, and assert the count the gate
 # reports: the cell on the upper bound is refused (the engine's upper edges are
 # exclusive), the same cell one line inside is allowed.
+#
+# Three deny-tag phases close the tag family:
+#
+#   * `deny_selection` — the carried `buildinggadgets2:deny` refuses a sneak click on a member
+#     (`minecraft:piston_head`: destroy speed 1.5, no fluid, so only the tag can refuse it) with
+#     upstream's `Invalid Block`, and leaves the previous selection in the component;
+#   * `deny_destination_control` — two `minecraft:snow` cells at grid destinations are ordinary
+#     replaceable cells under the carried tag: 8 cells would be allowed;
+#   * `deny_destination` — the same two cells after a world data pack re-declares the tag with
+#     `minecraft:snow` and the server reloads: 6 cells would be allowed. The pair is the proof:
+#     a read that always answers `false` reports 8 in the tagged run, one that always answers
+#     `true` reports 0 in the control run (and in every mode phase).
 #
 #   GAME=<launcher-built horizon-client> tools/e2e.sh
 #   GAME=$CONTROL_GAME tools/e2e.sh          # same Nightly, no package: the gadget
@@ -47,8 +60,18 @@ SOCK=${SOCK:-$TMP/buildinggadgets2-modes.sock}
 SELFTEST=${SELFTEST:-0}
 WORLD=${WORLD:-BuildingGadgets2Modes}
 TOOL=buildinggadgets2:gadget_building
-PHASES=11
+PHASES=14
 HELD="Building Gadget: held (blocked: no-cancellable-placement)"
+# A carried `buildinggadgets2:deny` member whose other selection clauses all pass, so only the
+# tag can refuse it: destroy speed 1.5 (> 0), no fluid, block item air.
+TAG_BLOCK=minecraft:piston_head
+# The plate faces the player (west), so its west face is a full 1x1 target
+# (26.3 outline [0,0,0 ... 0.25,1,1] for this facing); a north-facing head's west
+# face is open space and the click would hit nothing.
+TAG_BLOCK_STATE='minecraft:piston_head[facing=west,short=false,type=normal]'
+# A replaceable block, so the destination rule is the only thing that can refuse it once the
+# test world's data pack names it in the tag.
+DENYABLE_BLOCK=minecraft:snow
 
 [ -n "$GAME" ] || {
     echo "GAME must name a launcher-built horizon-client carrying buildinggadgets2.hmod" >&2
@@ -146,6 +169,20 @@ select_block() {
     ctl key shift up
     ctl wait 1
     [ "$(sneaking)" = "false" ] || fail "the player is still sneaking after 'key shift up'"
+}
+
+# Aim at a block's face and sneak right click it, as a player selecting a block does.
+select_at() { # x y z face
+    ctl look-at-block "$1" "$2" "$3" "$4" >/dev/null || fail "cannot aim at $1 $2 $3 $4"
+    ctl wait 1
+    select_block
+}
+
+# What block is at a single cell, as a block id (`minecraft:air` when empty): `ctl blocks`
+# reports the state string, so its property list is cut off.
+block_at() { # x y z
+    ctl blocks "$1" "$2" "$3" "$1" "$2" "$3" \
+        | jq -r '(.blocks[0][3] // "minecraft:air") | split("[")[0]'
 }
 
 command_reply() { # the action bar the command just printed
@@ -268,10 +305,143 @@ border_phase() {
     assert_held "$name" "$want" "$actual" "$spent" "$reply"
 }
 
+# The deny tag's selection rule (upstream's `GadgetBuilding.onShiftAction` →
+# `GadgetUtils.isValidBlockState`): a sneak click on a carried member answers
+# `Invalid Block` and leaves the previous selection alone; stone still selects. The two
+# expectations swap in a SELFTEST run, so each rejects.
+deny_selection_phase() {
+    local name=deny_selection
+    local reply at want_stone="Selected minecraft:stone" want_tagged="Invalid Block"
+    local want_status before after spent actual
+
+    echo "== deny tag phase $name: a $TAG_BLOCK cannot be selected, stone can =="
+    PHASE_REJECTED=0
+    reset_stage
+    ctl select "$TOOL" >/dev/null
+    # At eye level, two blocks east of the player: the west face is what the crosshair
+    # reaches, with nothing between it and the eye.
+    ctl setblock 2 151 4 "$TAG_BLOCK_STATE" >/dev/null
+    ctl wait 2
+    at=$(block_at 2 151 4)
+    echo "  deny-tagged block at 2 151 4: $at"
+    [ "$at" = "$TAG_BLOCK" ] \
+        || phase_fail "$name: the deny-tagged block is '$at', expected $TAG_BLOCK (a state that breaks cannot test the tag)"
+
+    reply=$(set_mode grid)
+    [ "$reply" = "Building Gadget mode set to grid" ] \
+        || phase_fail "$name: the mode reply was '$reply'"
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+    reply=$(set_place_on_top off)
+    [ "$reply" = "Building Gadget place-on-top off" ] \
+        || phase_fail "$name: the place-on-top reply was '$reply'"
+
+    if [ "$SELFTEST" = 1 ]; then
+        local swap=$want_stone
+        want_stone=$want_tagged
+        want_tagged=$swap
+    fi
+
+    select_at 0 150 0 south
+    reply=$(actionbar)
+    echo "  selection reply (stone): $reply"
+    [ "$reply" = "$want_stone" ] \
+        || phase_fail "$name: selecting stone answered '$reply', expected '$want_stone'"
+
+    select_at 2 151 4 west
+    reply=$(actionbar)
+    echo "  selection reply ($TAG_BLOCK): $reply"
+    [ "$reply" = "$want_tagged" ] \
+        || phase_fail "$name: selecting $TAG_BLOCK answered '$reply', expected '$want_tagged'"
+
+    reply=$(command_reply "/buildinggadgets2")
+    echo "  status: $reply"
+    want_status="Building Gadget: mode grid, range 5, block minecraft:stone, place-on-top off, placement held (blocked: no-cancellable-placement)"
+    [ "$reply" = "$want_status" ] \
+        || phase_fail "$name: the status reply was '$reply', expected '$want_status' (the refused click must not change the selection)"
+
+    ctl look-at-block 0 150 0 south >/dev/null || fail "cannot aim at the clicked block"
+    ctl wait 1
+    ctl give minecraft:stone 40 >/dev/null
+    ctl wait 2
+    ctl select "$TOOL" >/dev/null
+    before=$(count_stone)
+    ctl use-item >/dev/null
+    ctl wait 4
+    reply=$(actionbar)
+    after=$(count_stone)
+    spent=$((before - after))
+    actual=$(placed)
+    assert_held "$name" 8 "$actual" "$spent" "$reply"
+}
+
+# The deny tag's destination rule: the grid's eight destinations are air except two cells that
+# hold `minecraft:snow`, a replaceable block. Under the carried tag snow is ordinary (8); once
+# the test world's data pack names it in the tag, those two cells are refused (6).
+deny_destination_phase() {
+    local name=$1 want=$2
+    local reply before after spent actual snow_a snow_b
+
+    echo "== deny tag phase $name: snow at 2 of the grid's 8 destinations, $want would be allowed =="
+    PHASE_REJECTED=0
+    reset_stage
+    ctl setblock 6 150 6 "$DENYABLE_BLOCK" >/dev/null
+    ctl setblock -6 150 -6 "$DENYABLE_BLOCK" >/dev/null
+    ctl wait 2
+    snow_a=$(block_at 6 150 6)
+    snow_b=$(block_at -6 150 -6)
+    echo "  destinations (6,150,6) and (-6,150,-6): $snow_a, $snow_b"
+    [ "$snow_a" = "$DENYABLE_BLOCK" ] && [ "$snow_b" = "$DENYABLE_BLOCK" ] \
+        || phase_fail "$name: the two destination cells are '$snow_a' and '$snow_b', expected $DENYABLE_BLOCK"
+
+    reply=$(set_mode grid)
+    [ "$reply" = "Building Gadget mode set to grid" ] \
+        || phase_fail "$name: the mode reply was '$reply'"
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+    reply=$(set_place_on_top off)
+    [ "$reply" = "Building Gadget place-on-top off" ] \
+        || phase_fail "$name: the place-on-top reply was '$reply'"
+
+    select_at 0 150 0 south
+    ctl give minecraft:stone 40 >/dev/null
+    ctl wait 2
+    ctl select "$TOOL" >/dev/null
+    before=$(count_stone)
+    ctl use-item >/dev/null
+    ctl wait 4
+    reply=$(actionbar)
+    after=$(count_stone)
+    spent=$((before - after))
+    actual=$(placed)
+    assert_held "$name" "$want" "$actual" "$spent" "$reply"
+}
+
+# A world data pack that re-declares `buildinggadgets2:deny` with a replaceable block, so the
+# destination rule decides the two snow cells. `/reload` rebuilds the world's tables from its
+# packs (`Game::reload_world_tables`), which is what a `TagsUpdatedEvent` does upstream.
+install_deny_extension() {
+    local pack=$GAME_DIR/saves/$WORLD/datapacks/denyextension
+    mkdir -p "$pack/data/buildinggadgets2/tags/block"
+    cat > "$pack/pack.mcmeta" <<'JSON'
+{"pack":{"pack_format":121,"description":"buildinggadgets2 e2e: the deny tag with a replaceable member"}}
+JSON
+    cat > "$pack/data/buildinggadgets2/tags/block/deny.json" <<'JSON'
+{"values":["minecraft:snow"]}
+JSON
+    echo "== the test world declares $DENYABLE_BLOCK in the deny tag, then /reload =="
+    echo "  data pack: $pack"
+    ls -1 "$pack/data/buildinggadgets2/tags/block/" >&2
+    ctl command "reload" >/dev/null
+    ctl wait 6
+}
+
+
 echo "== launch (survival world $WORLD; the package is installed in the instance) =="
 launch "$WORLD"
 ctl wait-ready 120
-
 echo "== a plank platform under the player at y=149; the clicked block floats at (0,150,0) =="
 ctl command "time set noon"
 ctl command "difficulty peaceful"
@@ -336,6 +506,12 @@ border_phase edge_at_the_upper_bound 4 19
 border_phase one_cell_inside_the_bound 6 24
 ctl command "worldborder set 59999968" >/dev/null
 
+deny_selection_phase
+deny_destination_phase deny_destination_control 8
+install_deny_extension
+deny_destination_phase deny_destination 6
+
+
 if [ "$SELFTEST" = 1 ]; then
     [ "$REJECTED_PHASES" -ge "$PHASES" ] \
         || fail "SELFTEST: only $REJECTED_PHASES of $PHASES phases rejected the wrong expectation ($SELFTEST_FAILURES assertions)"
@@ -343,4 +519,4 @@ if [ "$SELFTEST" = 1 ]; then
     exit 1
 fi
 
-echo "PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; and the world border's upper edge refused the cell exactly on it while allowing it one cell inside"
+echo "PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; and the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag"

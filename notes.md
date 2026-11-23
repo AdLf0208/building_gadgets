@@ -170,8 +170,8 @@ replaced each old `Game::` helper are in
   there is no scroll/key hook. They reset on relog.
 - **Selection stores the raw state id**, so transient properties (age, lit,
   waterlogged, open, ...) are not cleaned as upstream's `cleanBlockState`
-  does; orientation properties are preserved. The `buildinggadgets2:deny` tag
-  is not consulted (no tag read is wired).
+  does; orientation properties are preserved. ~~The `buildinggadgets2:deny` tag
+  is not consulted (no tag read is wired).~~ **Closed in 0.2.5** — Slice 4.
 - **Placement is immediate** through `Game::native_set_block`: no render
   block/animation, no per-tick queue, no retry pass for supports placed later,
   no `BlockItem.place`/`setPlacedBy`, and block-entity data is not carried.
@@ -1008,6 +1008,9 @@ The list under `### Gaps (current, 0.2.3)` still holds, with one change and one 
 - **Still no `canSurvive` pre-check** (0.2.3's first gap). It matters less while the write
   is held; it comes back with it.
 
+*Closed by 0.2.5:* the `buildinggadgets2:deny` tag (gap of 0.2.3, repeated in 0.1.0) is carried and
+read — see [`## Slice 4`](#slice-4--the-buildinggadgets2deny-tag-2026-11-23-version-025).
+
 ### Verification (0.2.4)
 
 | Check | Result |
@@ -1046,3 +1049,285 @@ packed `Cargo.lock`; declared version **0.2.4**.
 > the one cell inside is allowed (proved in game: 19 vs 24 cells). Known gaps are
 > otherwise unchanged: no anchor or undo, no preview/animation queue, no energy, no bound
 > inventories, no mode wheel or GUI, and the other gadgets are later slices.
+
+## Slice 3 — the held-cell preview: measured, then parked (2026-11-23)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**The slice.** The gap it comes from is `### Gaps (current, 0.2.3)`: "**Placement is immediate**: no
+preview, no per-tick queue, no retry pass for supports placed later, no `BlockItem.place`/
+`setPlacedBy`, block-entity data of the placed state is not carried, no sound or particles." The
+preview is the half that needs no placement call at all — it draws the cells `runtime::plan` already
+produces, so it is the player-visible explanation of the 0.2.4 hold, and the tier fits (`deep` →
+renderers).
+
+**Outcome: parked, nothing shipped. 0.2.4 stays the published version** (`buildinggadgets2.hmod`
+40,798 B, sha256 `927409d7…f14a`, and the tree was reverted to exactly that). The package, its
+archive and every log under `../_shared/evidence/buildinggadgets2*/` are unchanged; the
+measurements and the two frames are in
+[`../_shared/evidence/buildinggadgets2-preview-parked/`](../_shared/evidence/buildinggadgets2-preview-parked/README.md).
+
+### Surface measured at the pin (`ports/_shared/sdk/0a875da/`)
+
+| Symbol | Shape |
+|---|---|
+| `render_level_stage` | hook v1 · `side = "client"` · `contract = "listen"` · non-cancellable · args `stage: RenderLevelStage`, `view: &WorldRenderView`, `draw: &'a mut dyn WorldDrawContext` |
+| `RenderLevelStage` | 5 variants, `#[non_exhaustive]`: `AfterSky`, `AfterOpaqueBlocks`, `AfterTranslucentBlocks`, `AfterWeather`, `AfterLevel` |
+| `WorldDrawContext` | `draw_instance_group`, **`draw_model_instances(ModelRef, &[ModelInstance]) -> Result<(), InstanceError>`**, `lines`, `quads` (unlit, alpha-blended, white atlas texel), `pipeline_quads`, `usage` |
+| `draw_model_instances` | one batch per model; 16,384 copies per view and per call; `InstanceError::{Model, NonFinite, InvalidLight, CapacityExceeded, Translucent}` — "a model with a translucent face is refused and never drawn as solid" |
+| `ModelInstance` | `origin: [f64; 3]` world blocks, `transform: [f32; 12]` (`IDENTITY_TRANSFORM`), `tint: 0xAARRGGBB` ("alpha multiplies only faces that have a tint index"), `light: LightCoords`, `overlay: Overlay` |
+| how a `ModelRef` is obtained | `standalone_models` (collect v2: `models`, `forms`) → `model_baking_completed` → `host.render_assets().model(&Identifier)` |
+| **a model without carrying a texture** | **yes** — a model file naming `minecraft:block/white_concrete` with `tintindex: 0` on all six faces; no texture bytes in the package, none regenerated |
+
+### What was measured in game, in order
+
+The pure side came first and was green (39 tests, the four new ones red first at 36 passed / 3
+failed, `EXIT:101`); the glue then needed four diagnostic builds, each a `--offscreen` frame:
+
+1. the hook fires: a `WorldDrawContext::quads` panel draws at `AfterTranslucentBlocks`;
+2. the model route works: the `standalone_models` id resolves and `draw_model_instances` draws a
+   green cube with an `0xFF00FF00` tint — so the tint and the vanilla-texture model are right;
+3. **the render hook's host carries no player**: `local_player()` answers `None` there, so the plan
+   cannot be made in `render_level_stage` (it was moved to `client_tick_post`, which does have the
+   full client host);
+4. **the client has no exact held-stack read**: `player_inventory_slots` is *Side: server — "None …
+   on a client"* (measured `None`); `player_inventory` returns the stacks **without** slot numbers,
+   so the selected hotbar slot cannot be resolved; `render_hand`'s `HandRender::stack` is the only
+   client-side stack copy and it read back **without** the `buildinggadgets2:gadget_state`
+   component (`held=true`, no selection) while the client's own inventory copy of the same stack
+   carries `selected:"minecraft:stone"`.
+
+**Blocker:** `blocked(no-client-held-stack-components)` — a client-side read of the main-hand stack
+*with its item components* is what the preview needs and what the pin does not stamp.
+**Issue shape:** *"A client-side read of the selected hotbar stack, or `player_inventory` returned
+with its slot numbers, so a client renderer can read the item components the server wrote (here the
+gadget's selection and mode) without a server round trip."*
+
+Not separable inside this slice's budget: whether `HandRender::stack` really drops the component or
+the probe's sneak click (made at an extended `block_interaction_range`) was refused by the server, so
+that no selection existed yet. Separating them needs one more package build plus an e2e slot; the
+wave's e2e queue is the bottleneck, so the slice stops rather than shipping a preview whose pixels
+were never observed. The two frames and the exact readings are in
+`../_shared/evidence/buildinggadgets2-preview-parked/README.md`.
+
+### What was reverted
+
+`src/runtime.rs` (the `Ghost`/`preview`/`ghost` API and its four tests), `src/support.rs` (the
+preview glue: the tick plan, the render draw, the standalone-model registration, the hand cache),
+`src/lib.rs` (the four hooks), `assets/buildinggadgets2/models/block/preview_cell.json`,
+`tools/preview_pixel.py`, the two `preview_phase`s in `tools/e2e.sh`, and the version bump
+(`horizon-mod.toml`/`Cargo.toml` back to 0.2.4). The rebuilt archive is byte-identical to the
+published 0.2.4 (`cargo horizon-mod build` → 40,798 B, `927409d7…f14a`), which is what
+`verify-sdk-package.py buildinggadgets2` checks against the tree.
+
+## Slice 4 — the `buildinggadgets2:deny` tag (2026-11-23, version 0.2.5)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Gaps (current, 0.2.3)`: *"The `buildinggadgets2:deny` tag is not consulted (no tag
+read is wired)"* — the last family whose absence is visible through the held reply, because the plan
+runs while the write is held and the reply reports the cells the gate would allow.
+
+### The jar's tag, enumerated before any code
+
+`unzip -p buildinggadgets2-1.3.9.jar data/buildinggadgets2/tags/block/deny.json` — 210 B,
+`sha256 227775ae7b654825003e0626823ebcb89c6a95f091202a791c60b4c3a56c1449`, carried **verbatim** to
+`data/buildinggadgets2/tags/block/deny.json` (`unzip -p` + `cmp`, byte-identical):
+
+| entry | what it resolves to in 26.3 (`block-tags.json`) | blocks |
+|---|---|---:|
+| `minecraft:piston_head` | itself | 1 |
+| `minecraft:bedrock` | itself | 1 |
+| `minecraft:end_portal_frame` | itself | 1 |
+| `minecraft:candle_cake` | itself | 1 |
+| `#minecraft:beds` | the 16 coloured beds (no nested tags) | 16 |
+| `#minecraft:portals` | `nether_portal`, `end_portal`, `end_gateway` | 3 |
+| `#minecraft:doors` | 22 doors (`wooden_doors` 11 + iron + 10 copper) | 22 |
+| **total** | | **45** |
+
+Every nested tag resolves in the prepared 26.3 resources, so the carried file is not dead data.
+
+### Where upstream consults it (and where it does not)
+
+- `GadgetUtils.isValidBlockState` (`GadgetUtils.java:36-40`): `blockState.is(BG2BlockTags.BG2DENY)`
+  → false, beside `getDestroySpeed < 0` and a non-source fluid.
+- Its callers on the **building** gadget: `GadgetBuilding.onShiftAction` — the **selection** — which
+  answers `buildinggadgets2.messages.invalidblock` = **"Invalid Block"** on the action bar and leaves
+  the gadget as it was. `BuildingUtils.build` (the destination loop) checks `mayInteract`, the place
+  event, `canBeReplaced`, `canSurvive` and the items, **not** the tag.
+- The tag's other callers (`BaseMode.isExchangingValid`, `BuildingUtils.exchange`,
+  `BuildingUtils.removeTickHandler`) are the exchange and destruction gadgets, which are later slices:
+  there the tag gates the *existing block at a destination*.
+
+### What shipped
+
+1. **The tag file**, verbatim (above), inside the package.
+2. **`runtime`** gains the whole of `isValidBlockState` as a pure rule, so the glue no longer holds
+   business logic: `DENY_TAG`, `denied(Option<bool>)`, `FluidAt`, and
+   `selectable(in_deny_tag, destroy_speed, fluid)` = *not denied* **and** *a readable, non-negative
+   destroy speed* **and** *(empty fluid or a source)*. `denied` is `Some(true)` only: an unknown
+   block/tag (`Some(false)`) and a tag table that has not loaded (`None`) are not refusals, per
+   `TagsHost::block_in_tag`'s own contract.
+3. **`support`**: one stamped, both-side read — `host.block_in_tag(state.block(), runtime::DENY_TAG)`
+   (`TagsHost`, `surface.json` `method:prelude::TagsHost::block_in_tag`, hash `4f53aa81…`) — on the
+   selection path (upstream's consumer, now with the `Invalid Block` reply) and as a **destination**
+   refusal in `can_place`.
+
+### The measurement that chose the in-game proof
+
+Every one of the 45 resolved members is **non-replaceable in every state** in 26.3
+(`gameplay-facts.json`, per state: 0 replaceable states over all 45 × their states). So a
+destination refusal is, with the *carried* tag, already implied by `can_place`'s replaceable test,
+and a count difference *from the carried tag alone* cannot be observed — a run that expected one
+would not be able to fail. The destination read is therefore proved where a tag member **is**
+replaceable, which is also how tags are meant to be used: a world data pack that (re-)declares
+`buildinggadgets2:deny` with `minecraft:snow` (a replaceable block). The engine takes a pack's file
+over a mod's contributed file for the same path (`overlay_files`), so in the test world the tag names
+snow; `/reload` rebuilds the world's tables (`Game::reload_world_tables`), which is what
+`TagsUpdatedEvent` does upstream.
+
+### Where the port departs from the Java (recorded, not silent)
+
+The **destination** refusal is the exchange gadget's rule applied to the build path, which the Java
+building gadget does not do. With the carried tag it is invisible (the measurement above); it decides
+only for a tag a data pack extends with a replaceable block, where the alternative is a gadget that
+refuses to *select* a block and then *overwrites* it. Recorded as a deviation for the reviewer; it is
+the only way the brief's destination rule has an observable effect at this pin.
+
+### Red → green (unit)
+
+`ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.5-deny.log` (`EXIT:101`): the six new tests
+run against `denied()` stubbed to `false` ("no tag read is wired", the 0.2.4 behaviour) —
+**38 passed, 3 failed**:
+
+```
+---- runtime::tests::the_deny_tag_refuses_only_a_positive_answer stdout ----
+thread 'runtime::tests::the_deny_tag_refuses_only_a_positive_answer' panicked at src/runtime.rs:1412:9:
+a tagged block is denied
+
+---- runtime::tests::a_tagged_block_cannot_be_selected stdout ----
+thread 'runtime::tests::a_tagged_block_cannot_be_selected' panicked at src/runtime.rs:1422:9:
+a block in buildinggadgets2:deny must not be selectable
+
+---- runtime::tests::a_tagged_destination_is_refused stdout ----
+thread 'runtime::tests::a_tagged_destination_is_refused' panicked at src/runtime.rs:1469:9:
+a denied destination
+
+test result: FAILED. 38 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Green: **41 passed, 0 failed** (`sdk-test.log`). The six new tests are
+`the_deny_tag_refuses_only_a_positive_answer`, `a_tagged_block_cannot_be_selected`,
+`an_untagged_block_with_a_positive_destroy_speed_is_selectable`,
+`an_unbreakable_block_cannot_be_selected`, `only_a_source_fluid_is_selectable`,
+`a_tagged_destination_is_refused`.
+
+### Red → green (in game, against the read switched off)
+
+The tagged count's assertion was also run **red**: `src/support.rs`'s destination read was replaced
+by a stub (the selection read kept), the manifest bumped to 0.2.6 so the launcher could not reuse a
+cached build (`Compiling buildinggadgets2 (1 of 1)`), and the e2e run as delivered
+(`ports/_shared/evidence/buildinggadgets2-e2e/e2e-deny-red-destination.log`, `EXIT:1`):
+
+```
+== deny tag phase deny_destination: snow at 2 of the grid's 8 destinations, 6 would be allowed ==
+  destinations (6,150,6) and (-6,150,-6): minecraft:snow, minecraft:snow
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 8 cells would be allowed, 0 placed, 0 spent
+FAIL: deny_destination: the held reply was 'Building Gadget: held (blocked: no-cancellable-placement) - 8 cells would be allowed, 0 placed, 0 spent', expected '... 6 cells would be allowed, ...'
+```
+
+The same run's `deny_selection` and `deny_destination_control` phases passed, so the red names the
+destination read exactly. The tree, the manifest and the package were restored to 0.2.5
+(`src/support.rs` and `horizon-mod.toml` sha256 equal the package's copies) and the launcher game
+rebuilt from that tree (the exported package's `src/support.rs` is `26dcb8ae…` in both).
+
+### In game (fail-capable, on the delivered bytes)
+
+Quoted from `ports/_shared/evidence/buildinggadgets2-e2e/e2e-deny.log`:
+
+```
+== deny tag phase deny_selection: a minecraft:piston_head cannot be selected, stone can ==
+  deny-tagged block at 2 151 4: minecraft:piston_head
+  selection reply (stone): Selected minecraft:stone
+  selection reply (minecraft:piston_head): Invalid Block
+  status: Building Gadget: mode grid, range 5, block minecraft:stone, place-on-top off, placement held (blocked: no-cancellable-placement)
+  placed: []
+  consumed: 0 stone
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 8 cells would be allowed, 0 placed, 0 spent
+== deny tag phase deny_destination_control: snow at 2 of the grid's 8 destinations, 8 would be allowed ==
+  destinations (6,150,6) and (-6,150,-6): minecraft:snow, minecraft:snow
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 8 cells would be allowed, 0 placed, 0 spent
+== the test world declares minecraft:snow in the deny tag, then /reload ==
+== deny tag phase deny_destination: snow at 2 of the grid's 8 destinations, 6 would be allowed ==
+  destinations (6,150,6) and (-6,150,-6): minecraft:snow, minecraft:snow
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 6 cells would be allowed, 0 placed, 0 spent
+PASS: … the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag
+EXIT:0
+```
+
+`minecraft:piston_head` is the tagged block because it is a member whose *other* clauses all pass
+(destroy speed 1.5, block item air, no fluid), so only the tag can refuse it; it is placed
+`facing=west` because that facing's outline is a full 1×1 plate at the west face
+(`[0,0,0 … 0.25,1,1]`), so the crosshair actually reaches it.
+
+**The pair.** Same world, same click, only the merged tag differs: 8 with snow untagged, 6 with snow
+tagged. A read that always answers `false` reports 8 in the tagged phase (measured in the red run
+above); one that always answers `true` reports 0 in the control phase and in all 9 mode phases. The
+SELFTEST run inverts every phase's expectation and **all 14 phases reject** (`e2e-deny-selftest.log`,
+`FAIL` + `EXIT:1`, 30 assertions).
+
+### Coverage — every family in the jar (0.2.5)
+
+Replaces the 0.2.4 table; unchanged rows are the same verdicts.
+
+| Family | Status |
+|---|---|
+| `build_to_me` (default), `vertical_wall`, `vertical_column`, `surface`, `horizontal_wall`, `stairs`, `horizontal_row`, `grid`, `place_on_top` | plan tested — phases as in 0.2.4, 0 written, 0 spent |
+| `buildinggadgets2:deny` — **selection** | tested — phase `deny_selection`: `Invalid Block`, `minecraft:stone` still selected, held count 8 unchanged |
+| `buildinggadgets2:deny` — **destination** | tested — phases `deny_destination_control` (8) and `deny_destination` (6) in one run, 8 vs 6 |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| per-destination placement gate | tested — `may_edit`/`inside_border` units + border phases (19 vs 24) |
+| mode/range/placeontop/status replies | tested — replied by value, status names the hold |
+| carried recipe | tested — crafted in a table; ingredients consumed; missing-lapis control empty |
+| gadget item | tested — crafted, given, selected, held; unknown in the control game |
+| anchor, undo, energy | not ported — no anchor/undo list and no FE hook on the gadget |
+| preview, per-tick queue, retry | not ported — the preview is `blocked(no-client-held-stack-components)` (parked slice, see above) |
+| bound inventory / AE2 / Curios | not ported — payment walks the main inventory |
+| mode wheel, GUI, tooltip | not ported — the mode is a command; the screen is client work |
+| paste/rotate/cut/destruction/exchange gadgets | not ported — later slices (the exchange gadget is the tag's other consumer) |
+
+### Verification (0.2.5)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **41 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.5-deny.log`, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | exit 0 (`sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **43,350 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.5 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` | `0a875da  made for` (`sdk-fits.log`) |
+| `fits --build 0b14f8a…` | `0b14f8a  fits` — a different build, so the pin run is not a tautology (`sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| e2e (modded, delivered bytes) | `PASS` + `EXIT:0`, 14 phases (`e2e-deny.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` (`e2e-deny-control.log`) |
+| e2e (`SELFTEST=1`) | 14/14 phases rejected, `FAIL` + `EXIT:1` (`e2e-deny-selftest.log`) |
+| e2e (red: destination read switched off) | `FAIL: deny_destination … 8 cells …, expected 6` + `EXIT:1` (`e2e-deny-red-destination.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 7/7 |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **43,350 B**, sha256
+`9d19a3410c5dea90b062fb5818fea876710085ef412f9a23de151658c9bbfcf7`, **19 entries** (the 18 of 0.2.4
+plus `data/buildinggadgets2/tags/block/deny.json`), no packed `Cargo.lock`; declared version **0.2.5**.
+
+### Changelog (0.2.5)
+
+> **Building Gadgets 2 0.2.5** — the mod's own `buildinggadgets2:deny` block tag is now carried and
+> read. A sneak click on any of its 45 blocks (the piston head, bedrock, the end-portal frame, candle
+> cake, the 16 beds, the 3 portals and the 22 doors) answers upstream's *Invalid Block* and leaves the
+> gadget as it was, and a build destination whose block the tag names is refused (that half is the
+> exchange gadget's own rule in Java; with the carried tag it agrees with the replaceable test, and it
+> decides for a tag a data pack extends — proved in game, 8 cells with ordinary snow at two grid
+> destinations and 6 once the tag names snow). The selection rules (`isValidBlockState`) moved into the
+> pure, unit-tested planner. The build stays held (`blocked: no-cancellable-placement`), the preview
+> stays `blocked(no-client-held-stack-components)`, and the other gaps are unchanged.

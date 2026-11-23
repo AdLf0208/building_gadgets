@@ -1,15 +1,40 @@
 # Validation
 
 > **Historical (0.1.0, the retired `.hnmod` format).** The current package is the
-> SDK `.hmod` (**0.2.4**): its ladder, artifact and evidence are in
-> [`notes.md`](notes.md) → `## Review repair (0.2.4)` and `## Slice 2 — the mode
-> family`, with the logs under `../_shared/evidence/buildinggadgets2/sdk-*.log`
-> and the in-game legs under `../_shared/evidence/buildinggadgets2-e2e/`.
-> **0.2.4 holds the block writes** (`blocked: no-cancellable-placement`); the
-> in-game proof is the held click plus the two world-border edge phases, not a
-> placed row. The staged `horizon.py` steps below no longer exist.
+> SDK `.hmod` (**0.2.5**): its ladder, artifact and evidence are in
+> [`notes.md`](notes.md) → `## Slice 4 — the buildinggadgets2:deny tag`, with the logs under
+> `../_shared/evidence/buildinggadgets2/sdk-*.log` and the in-game legs under
+> `../_shared/evidence/buildinggadgets2-e2e/`.
+> **0.2.5 still holds the block writes** (`blocked: no-cancellable-placement`); the
+> in-game proof is the held click, the two world-border edge phases and the three
+> deny-tag phases, not a placed row. The staged `horizon.py` steps below no longer exist.
 
-## 0.2.4 (the current package)
+## 0.2.5 (the current package)
+
+| Check | Result |
+|---|---|
+| `cargo test` | 41 passed, 0 failed (red first: 38 passed / 3 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice (`rm -f Cargo.lock` each) | 43,350 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | exit 0 / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok` |
+| `tools/e2e.sh` (modded, 14 phases) | `PASS` + `EXIT:0` |
+| `tools/e2e.sh` with `GAME=$CONTROL_GAME` | `FAIL` + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 14 phases rejected (30 assertions) + `EXIT:1` |
+| e2e with the destination read switched off (red) | `FAIL: deny_destination … 8 …, expected 6` + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 7/7 |
+
+Artifact: `buildinggadgets2.hmod` 43,350 B, sha256
+`9d19a3410c5dea90b062fb5818fea876710085ef412f9a23de151658c9bbfcf7`, 19 entries (the deny tag is the
+new one), no packed `Cargo.lock`; declared version 0.2.5.
+
+The staged commands used the slot registry (`build-slot.sh run --step test|lint|fmt|build|check|e2e`)
+with `BUILD_LOCAL=1` (these steps take seconds in the SDK layout, so the remote box buys nothing), and
+the in-game legs used the launcher-built game at the pin
+(`launcher-game.sh build buildinggadgets2`, `Compiling buildinggadgets2 (1 of 1)`).
+
+## 0.2.4 (previous)
 
 | Check | Result |
 |---|---|
@@ -132,3 +157,33 @@ matches the new pin (the measured trap). Every step ran through `ports/tools/bui
 The in-game leg asserts the exact placed cell set per mode (from the upstream Java, not the port's
 planner), one stone consumed per cell, the parsed action-bar replies of `mode`/`range`/`placeontop`/
 status, and the carried recipe's output and ingredient consumption with a missing-lapis control.
+
+## 2026-11-23 — the held-cell preview slice: measured, parked, reverted
+
+The next slice was the preview (`render_level_stage` + `draw_model_instances`). Its pure half was
+green (39 tests; the four new ones red first at 36 passed / 3 failed, `EXIT:101`), and four
+`--offscreen` diagnostic builds measured the client route:
+
+| Measured | Result |
+|---|---|
+| `render_level_stage` at `AfterTranslucentBlocks` + `WorldDrawContext::quads` | fires and draws |
+| `standalone_models` → `model_baking_completed` → `render_assets().model` | the package's own model id resolves |
+| `draw_model_instances` with a tint | draws (green cube), tint and the vanilla-texture model apply |
+| `local_player()` on the **render** hook's host | `None` — the plan cannot be made there |
+| `player_inventory_slots` on the client | `None` (documented *Side: server*) |
+| `render_hand`'s `HandRender::stack` components | `held=true`, but the gadget's state read back with **no selection** |
+
+`blocked(no-client-held-stack-components)`: the pin has no client-side read of the main-hand stack
+*with its item components*, which is what the preview needs. Separating "the hand copy drops the
+component" from "the probe's out-of-reach sneak click was refused" needs another package build plus
+an e2e slot; the wave's queue is the bottleneck, so the slice stops rather than shipping a preview
+whose pixels were never observed. Evidence:
+`../_shared/evidence/buildinggadgets2-preview-parked/` (two frames + the readings).
+
+**Reverted to 0.2.4.** The slice's code, model asset, e2e phases and version bump were removed; the
+rebuilt archive is **byte-identical** to the published one — `buildinggadgets2.hmod` **40,798 B**,
+sha256 `927409d7750cc246e1e98630b6355bc9e90ba6c7cdf17c80f9e87bb05066f14a` — so **0.2.4 stays the
+published version** and its evidence (`sdk-test.log` 35 passed, `e2e-hold*.log`) still describes the
+delivered bytes.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

@@ -104,6 +104,45 @@ pub fn spawn_protection_from(properties: &str) -> i32 {
         .unwrap_or(VANILLA_SPAWN_PROTECTION)
 }
 
+/// Upstream's `buildinggadgets2:deny` block tag (`BG2BlockTags.BG2DENY`), carried verbatim as
+/// `data/buildinggadgets2/tags/block/deny.json`: the blocks a sneak click may not select
+/// (`GadgetUtils.isValidBlockState`) and, in the port, a cell a build never writes into.
+pub const DENY_TAG: &str = "buildinggadgets2:deny";
+
+/// The tag's answer as a refusal: `Some(true)` is the merged tag naming the block. An unknown
+/// block or tag (`Some(false)`) and a tag registry that has not loaded yet (`None`) are not a
+/// refusal — the host's own contract (`TagsHost::block_in_tag`), so an unloaded table cannot
+/// make the gadget refuse a plain block.
+#[must_use]
+pub fn denied(in_deny_tag: Option<bool>) -> bool {
+    in_deny_tag == Some(true)
+}
+
+/// What the game says about the fluid at a cell (`FluidState`), the fluid clause of
+/// [`selectable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FluidAt {
+    /// `FluidState.getAmount`: 0 for the empty fluid.
+    pub amount: u32,
+    /// `FluidState.isSource`: a flowing fluid is not selectable.
+    pub source: bool,
+}
+
+/// `GadgetUtils.isValidBlockState`: what a sneak right click may store in the gadget — a block
+/// that is not in the deny tag, that has a readable destroy speed and is not unbreakable, and
+/// that is not a flowing fluid. `None` for a fact the host could not answer refuses it, as the
+/// 0.1.0 port did for the state reads it asked.
+#[must_use]
+pub fn selectable(
+    in_deny_tag: Option<bool>,
+    destroy_speed: Option<f32>,
+    fluid: Option<FluidAt>,
+) -> bool {
+    !denied(in_deny_tag)
+        && destroy_speed.is_some_and(|speed| speed >= 0.0)
+        && fluid.is_none_or(|fluid| fluid.amount == 0 || fluid.source)
+}
+
 /// A wheel step on the gadget: upstream's slider moves one block per notch and
 /// clamps to 1..=15. Positive `steps` (scroll up) increases the range.
 #[must_use]
@@ -1361,5 +1400,73 @@ mod tests {
             VANILLA_SPAWN_PROTECTION
         );
         assert_eq!(spawn_protection_from("  spawn-protection = 4  \n"), 4);
+    }
+
+    /// The gap this slice closes: `GadgetUtils.isValidBlockState`'s first clause. Only a
+    /// positive answer refuses; an untagged block, an unknown tag and a tag table that has not
+    /// loaded are not refusals.
+    #[test]
+    fn the_deny_tag_refuses_only_a_positive_answer() {
+        assert_eq!(DENY_TAG, "buildinggadgets2:deny");
+        assert!(denied(Some(true)), "a tagged block is denied");
+        assert!(!denied(Some(false)), "an untagged block is not denied");
+        assert!(!denied(None), "an unloaded tag table does not deny");
+    }
+
+    /// A tag member is refused by the selection even though every other upstream clause passes
+    /// it: `minecraft:piston_head` has destroy speed 1.5 and no fluid, so only the tag can
+    /// refuse it (measured in 26.3's own facts; it is one of the carried tag's 45 members).
+    #[test]
+    fn a_tagged_block_cannot_be_selected() {
+        assert!(
+            !selectable(Some(true), Some(1.5), None),
+            "a block in buildinggadgets2:deny must not be selectable"
+        );
+    }
+
+    /// The control: the same facts untagged are selectable, so a read that answers `true`
+    /// always fails here rather than passing silently.
+    #[test]
+    fn an_untagged_block_with_a_positive_destroy_speed_is_selectable() {
+        assert!(selectable(Some(false), Some(1.5), None));
+        assert!(selectable(None, Some(0.2), None), "a bed's own speed");
+        assert!(selectable(Some(false), Some(0.0), None));
+    }
+
+    /// `getDestroySpeed < 0` is vanilla's unbreakable block, and an unreadable speed refuses.
+    #[test]
+    fn an_unbreakable_block_cannot_be_selected() {
+        assert!(!selectable(Some(false), Some(-1.0), None), "bedrock");
+        assert!(!selectable(Some(false), None, None), "no answer");
+    }
+
+    /// The fluid clause: the empty fluid and a source are selectable, a flowing fluid is not.
+    #[test]
+    fn only_a_source_fluid_is_selectable() {
+        let empty = FluidAt {
+            amount: 0,
+            source: false,
+        };
+        let source = FluidAt {
+            amount: 1000,
+            source: true,
+        };
+        let flowing = FluidAt {
+            amount: 1000,
+            source: false,
+        };
+        assert!(selectable(Some(false), Some(100.0), Some(empty)));
+        assert!(selectable(Some(false), Some(100.0), Some(source)));
+        assert!(!selectable(Some(false), Some(100.0), Some(flowing)));
+        assert!(selectable(None, Some(100.0), None), "no fluid read");
+    }
+
+    /// The destination half: a cell whose block is in the tag is never written into, and an
+    /// untagged cell is left to the replaceable test.
+    #[test]
+    fn a_tagged_destination_is_refused() {
+        assert!(denied(Some(true)), "a denied destination");
+        assert!(!denied(Some(false)), "an ordinary destination");
+        assert!(!denied(None), "an unloaded tag table writes as before");
     }
 }

@@ -20,6 +20,10 @@ use crate::runtime::{self, DEFAULT_RANGE, GadgetCommand, MAX_RANGE, Mode, Player
 /// The persisted state component, upstream's `GadgetNBT` payload on the stack.
 pub const COMPONENT: &str = "buildinggadgets2:gadget_state";
 
+/// `buildinggadgets2.messages.invalidblock` (`GadgetBuilding.onShiftAction`): the action-bar
+/// line a refused selection prints, verbatim from the mod's own `en_us.json`.
+pub const INVALID_BLOCK: &str = "Invalid Block";
+
 /// The main inventory's slots: the hotbar (0 to 8) and then the 27 backpack slots.
 /// Equipment and the off hand are not payment, as upstream pays from the main
 /// inventory first.
@@ -151,7 +155,12 @@ fn write_held(host: &mut dyn ServerHost, player: PlayerRef, state: &GadgetState)
 }
 
 /// Upstream's `GadgetUtils.isValidBlockState`: a real block (not air), not
-/// unbreakable, and a fluid only when it is a source.
+/// unbreakable, not in the `buildinggadgets2:deny` tag, and a fluid only when it is a source.
+///
+/// The rule (and its tests) lives in [`runtime::selectable`]; this is the read. `block_in_tag`
+/// is the host's `TagsHost::block_in_tag` over the world's merged block tag — the package's own
+/// `data/buildinggadgets2/tags/block/deny.json` plus every data pack that extends it — and it is
+/// `None` only before those tags load, which [`runtime::denied`] treats as "not tagged".
 fn selectable(host: &dyn ServerHost, level: LevelRef, pos: [i32; 3], state: BlockState) -> bool {
     let facts = host.block_states();
     let Ok(name) = facts.name(state.block()) else {
@@ -163,14 +172,15 @@ fn selectable(host: &dyn ServerHost, level: LevelRef, pos: [i32; 3], state: Bloc
     ) {
         return false;
     }
-    // A destroy speed of -1 is vanilla's unbreakable block (bedrock, barrier).
-    if !facts.destroy_speed(state).is_some_and(|speed| speed >= 0.0) {
-        return false;
-    }
-    match level.fluid_state(host, pos) {
-        Some(fluid) if fluid.amount > 0 => fluid.source,
-        _ => true,
-    }
+    let fluid = level.fluid_state(host, pos).map(|fluid| runtime::FluidAt {
+        amount: u32::from(fluid.amount),
+        source: fluid.source,
+    });
+    runtime::selectable(
+        host.block_in_tag(state.block(), runtime::DENY_TAG),
+        facts.destroy_speed(state),
+        fluid,
+    )
 }
 
 /// The block's name for a status reply: the state string resolved back to its block,
@@ -261,6 +271,14 @@ impl runtime::World for LevelWorld<'_> {
         let Some(existing) = self.level.block_state(self.host, pos) else {
             return false;
         };
+        // The deny tag's rule per destination: a cell whose block the merged
+        // `buildinggadgets2:deny` names is never written into. With the carried tag this is
+        // implied by the replaceable test (none of its 45 members is replaceable in any state,
+        // measured in 26.3); a data pack that adds a replaceable member — the exchange gadget's
+        // own rule upstream — makes it decide.
+        if runtime::denied(self.host.block_in_tag(existing.block(), runtime::DENY_TAG)) {
+            return false;
+        }
         self.host.block_states().replaceable(existing) == Some(true)
     }
 
@@ -402,6 +420,9 @@ fn use_on_block(
     if player.is_secondary_use_active(host).unwrap_or(false) {
         let clicked = level.block_state(host, event.pos)?;
         if !selectable(host, level, event.pos, clicked) {
+            // Upstream's `onShiftAction`: the invalid-block line on the action bar, then the
+            // base gadget's pass-through, so the gadget keeps what it already had selected.
+            let _ = player.action_bar(host, Text::literal(INVALID_BLOCK));
             return None;
         }
         let text = host.block_state_string(clicked)?;

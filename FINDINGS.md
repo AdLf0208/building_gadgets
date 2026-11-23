@@ -50,6 +50,21 @@ and the Patchouli entry `mode_horz_row.json`.
   VerticalWall, VerticalColumn, Surface, HorizontalWall, Stairs, HorizontalRow
   and Grid (`GadgetModes`).
 
+### The `buildinggadgets2:deny` block tag
+
+`data/buildinggadgets2/tags/block/deny.json` (1.3.9 jar, 210 B) names the blocks the gadget must keep
+away from: `minecraft:piston_head`, `minecraft:bedrock`, `minecraft:end_portal_frame`,
+`minecraft:candle_cake`, and the `#minecraft:beds` (16), `#minecraft:portals`
+(`nether_portal`, `end_portal`, `end_gateway`) and `#minecraft:doors` (22) tags — 45 blocks resolved.
+
+`GadgetUtils.isValidBlockState` (`GadgetUtils.java:36-40`) is `!is(BG2DENY) && getDestroySpeed >= 0 &&
+(no fluid || a source)`. On the **building** gadget it is consulted at *selection* only
+(`GadgetBuilding.onShiftAction`, which answers `buildinggadgets2.messages.invalidblock` = "Invalid
+Block" and passes the click through); `BuildingUtils.build`'s destination loop does not read it. The
+destination-side readers are the exchange gadget (`BaseMode.isExchangingValid`,
+`BuildingUtils.exchange`) and the destruction gadget (`BuildingUtils.removeTickHandler`), both later
+slices. Read on 2026-11-23 from the `1.21.1` branch and the 1.3.9 jar's data.
+
 ### Selection (sneak right click)
 
 `BaseGadget.use` → shift → `GadgetBuilding.onShiftAction`:

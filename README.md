@@ -4,7 +4,9 @@ A native Horizon port of **Building Gadgets 2** (`Direwolf20-MC/BuildingGadgets2
 MIT). The building gadget is ported: sneak right click a block to select it, then
 `/buildinggadgets2 mode` picks one of upstream's eight modes (`build_to_me` by
 default, `vertical_wall`, `vertical_column`, `surface`, `horizontal_wall`,
-`stairs`, `horizontal_row`, `grid`) within the 1..15 range.
+`stairs`, `horizontal_row`, `grid`) within the 1..15 range. The carried
+`buildinggadgets2:deny` block tag refuses a sneak click on any of its members
+(upstream's `Invalid Block`) and a build destination whose block it names.
 
 **The build is held in this version.** The SDK at the campaign pin has no
 placement call that names the acting player *and* lets a protection mod cancel
@@ -26,17 +28,17 @@ against the pinned game build; the SDK in `.horizon/sdk/` is fetched by
 `cargo horizon-mod` and never packed.
 
 ```text
-horizon-mod.toml               id, version 0.2.4, api 0.2, side both, [native] pins
+horizon-mod.toml               id, version 0.2.5, api 0.2, side both, [native] pins
 Cargo.toml                     one crate; the only dependency is horizon-mod-api
 src/lib.rs                     the one `impl Hooks` (register, component_types, commands, wheel)
 src/support.rs                 game glue: component, inventory, the held build, commands, wheel
-src/runtime.rs                 pure mode planners, the placement hold and the border gate (35 tests)
+src/runtime.rs                 pure mode planners, the placement hold, the border gate and the deny tag (41 tests)
 assets/buildinggadgets2/       item definition, model, texture, lang
-data/buildinggadgets2/         item behaviour row, recipe, advancement, creative tab
+data/buildinggadgets2/         item behaviour row, recipe, advancement, tab, the deny tag
 LICENSE, LICENSE-NOTICE.md     the MIT text and where the port came from (packed)
 icon.png                       optional package icon (packed)
 buildinggadgets2.hmod          the delivered package
-tools/e2e.sh                   fail-capable in-game check (recipe + one phase per mode + border edges)
+tools/e2e.sh                   fail-capable in-game check (recipe, every mode, borders, the deny tag)
 tools/craft_gadget.py          crafts the carried recipe in a real crafting table
 notes.md, FINDINGS.md, VALIDATION.md, REPIN-AUDIT.md
 ```
@@ -47,7 +49,7 @@ Run these in the port; the SDK layout needs no staging (`CARGO_INCREMENTAL=0`,
 no `--target-dir`).
 
 ```sh
-CARGO_INCREMENTAL=0 cargo test                            # 35 runtime tests
+CARGO_INCREMENTAL=0 cargo test                            # 41 runtime tests
 CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
 cargo fmt --check                                          # NOT --all: it would format the SDK
 rm -f Cargo.lock                                           # a packed lock changes the artifact
@@ -66,7 +68,7 @@ native mod is compiled into `horizon-client`:
 ```sh
 ports/tools/launcher-game.sh build buildinggadgets2
 eval "$(ports/tools/launcher-game.sh env buildinggadgets2)"
-bash tools/e2e.sh                    # recipe + 9 mode phases + 2 border phases: PASS
+bash tools/e2e.sh                    # recipe + 9 modes + 2 borders + 3 deny-tag phases: PASS
 GAME=$CONTROL_GAME bash tools/e2e.sh # no package: FAIL (recipe/id unknown)
 SELFTEST=1 bash tools/e2e.sh         # every phase inverted: FAIL
 ```
@@ -78,11 +80,16 @@ block and two world-border phases. Every phase asserts that the click **wrote no
 block** and **spent no stone**, and that the action bar carried the exact cell
 count the gate would have allowed (the upstream shape's cell count for the modes,
 and the two sides of the border's upper edge for the border phases). The
-`mode`/`range`/`placeontop`/status replies are asserted by value too.
+`mode`/`range`/`placeontop`/status replies are asserted by value too. Three
+deny-tag phases close the tag family: a sneak click on `minecraft:piston_head`
+answers `Invalid Block` and leaves `minecraft:stone` selected, and the grid's
+held count is 8 with ordinary `minecraft:snow` at two destinations but 6 once a
+test-world data pack names snow in the tag (the pair that proves the read).
 
 ## Scope and gaps
 
-All eight building modes, the mode/place-on-top commands and the per-destination
+All eight building modes, the mode/place-on-top commands, the
+`buildinggadgets2:deny` tag (selection and destination) and the per-destination
 placement gate (build permission, `mayUseItemAt`, the world border with its
 exclusive upper edges, a dedicated server's spawn protection) are ported; the
 write itself is held as described above. The radial mode wheel (a client screen),
