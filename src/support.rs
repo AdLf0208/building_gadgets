@@ -444,7 +444,7 @@ fn use_on_block(
             level,
             rights,
         };
-        runtime::plan(
+        runtime::build(
             &mut world,
             state.mode,
             &runtime::BuildRequest {
@@ -457,7 +457,15 @@ fn use_on_block(
             },
         )
     };
-    place(host, player, level, &cells, place_state, item);
+    match cells {
+        runtime::Attempt::Cells(cells) => place(host, player, level, &cells, place_state, item),
+        // The pin has no placement call a protection mod can cancel per position, so the
+        // click writes nothing and says why (see `runtime::placement_hold`). The planned
+        // count keeps the border and protection gate observable in game.
+        runtime::Attempt::Held { allowed } => {
+            let _ = player.action_bar(host, Text::literal(runtime::held_reply(allowed)));
+        }
+    }
     Some(InteractionResult::SuccessServer)
 }
 

@@ -1,11 +1,31 @@
 # Validation
 
 > **Historical (0.1.0, the retired `.hnmod` format).** The current package is the
-> SDK `.hmod` (0.2.3): its ladder, artifact and evidence are in
-> [`notes.md`](notes.md) → `## Slice 2 — the mode family` and
-> `## Migration to the SDK format` → *Verification*, with the logs under
-> `../_shared/evidence/buildinggadgets2/sdk-*.log`. The staged `horizon.py` steps
-> below no longer exist.
+> SDK `.hmod` (**0.2.4**): its ladder, artifact and evidence are in
+> [`notes.md`](notes.md) → `## Review repair (0.2.4)` and `## Slice 2 — the mode
+> family`, with the logs under `../_shared/evidence/buildinggadgets2/sdk-*.log`
+> and the in-game legs under `../_shared/evidence/buildinggadgets2-e2e/`.
+> **0.2.4 holds the block writes** (`blocked: no-cancellable-placement`); the
+> in-game proof is the held click plus the two world-border edge phases, not a
+> placed row. The staged `horizon.py` steps below no longer exist.
+
+## 0.2.4 (the current package)
+
+| Check | Result |
+|---|---|
+| `cargo test` | 35 passed, 0 failed |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice (`rm -f Cargo.lock` each) | 40,798 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da` / `fits --build 0b14f8a` | exit 0 / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| `tools/e2e.sh` (modded) | `PASS` + `EXIT:0` |
+| `tools/e2e.sh` with `GAME=$CONTROL_GAME` | `FAIL` + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 11 phases rejected + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 3/3 |
+
+Artifact: `buildinggadgets2.hmod` 40,798 B, sha256
+`927409d7750cc246e1e98630b6355bc9e90ba6c7cdf17c80f9e87bb05066f14a`, 18 entries, no
+packed `Cargo.lock`.
 
 Validated on Linux with Rust 1.95.0 against the exact revisions in
 `compatibility.json` (Horizon `c9d474d`, horizon-mixins `d9c83d7`), 2026-11-05.

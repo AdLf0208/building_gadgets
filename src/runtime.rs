@@ -64,7 +64,10 @@ pub fn may_edit(pos: [i32; 3], rights: &EditRights) -> bool {
         && !spawn_protected(pos, rights)
 }
 
-/// `WorldBorder.isWithinBounds`: the block's own x/z against the border's edges.
+/// `WorldBorder.isWithinBounds`: the block's own x/z against the border's edges. The upper
+/// edges are **exclusive** (`min <= v < max`), as `BorderGeometry::is_within_bounds` is for a
+/// zero margin (`crates/horizon-core/src/geometry/border.rs:240-243`): the cell whose
+/// coordinate equals `max` is outside the border.
 #[must_use]
 pub fn inside_border(pos: [i32; 3], border: Option<[f64; 4]>) -> bool {
     let Some([min_x, min_z, max_x, max_z]) = border else {
@@ -72,7 +75,7 @@ pub fn inside_border(pos: [i32; 3], border: Option<[f64; 4]>) -> bool {
     };
     let x = f64::from(pos[0]);
     let z = f64::from(pos[2]);
-    x >= min_x && x <= max_x && z >= min_z && z <= max_z
+    x >= min_x && x < max_x && z >= min_z && z < max_z
 }
 
 /// `DedicatedServer.isSpawnProtected(pos, player)`: a non-operator inside a positive
@@ -314,6 +317,71 @@ pub fn plan(world: &mut impl World, mode: Mode, request: &BuildRequest) -> Vec<[
         Mode::Grid => grid(world, &mut cells, request),
     }
     cells
+}
+
+/// The symbol a held placement is `blocked(...)` by, and the token its reply names.
+pub const NO_CANCELLABLE_PLACEMENT: &str = "no-cancellable-placement";
+
+/// Why a generated placement is held at this pin, or `None` once the SDK can write a cell
+/// as the acting player and let a protection mod cancel that one position.
+///
+/// Measured against `ports/_shared/sdk/0a875da` (2026-11-23), and recorded in
+/// `notes.md` under `## Review repair`:
+///
+/// - `LevelRef::set_block` is actor-free: it checks residency and height only.
+/// - `PlayerRef::place_block` runs in the player's turn but its contract says *"Nothing else
+///   of vanilla's `BlockItem.place` or `useOn` runs: no check that the block may be placed
+///   there (survival, entity obstruction, build permission, spawn protection)"*, so a
+///   protection mod's `entity_place` never hears it.
+/// - `PlayerRef::perform_action` (and `perform_action_scoped`) is the one call that runs
+///   "reach, protection and the border" and the pre-hooks, but it is a **fake player's**
+///   action: `ActionRefused::NotFake` is "the handle is a real player's".
+///
+/// So a gadget held by a real player cannot ask a protection mod per cell, and writing
+/// anyway would place blocks through a claim. The build is held until one of those changes.
+#[must_use]
+pub const fn placement_hold() -> Option<&'static str> {
+    Some(NO_CANCELLABLE_PLACEMENT)
+}
+
+/// What one build click does: write cells, or place nothing because the pin has no
+/// cancellable placement path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Attempt {
+    /// The cells to write, in placement order.
+    Cells(Vec<[i32; 3]>),
+    /// Place nothing. `allowed` cells passed the player's own gate and would have been
+    /// written, which keeps the gate observable in game while the modes are held.
+    Held {
+        /// How many cells the gate would have allowed.
+        allowed: usize,
+    },
+}
+
+/// One build click, gated by [`placement_hold`]: the cells to write, or a held click.
+///
+/// The plan still runs while held: it reads the world and asks [`World::can_place`], so a
+/// held click reports the cells it would have built (and the border and protection gate it
+/// applies) instead of hiding them.
+#[must_use]
+pub fn build(world: &mut impl World, mode: Mode, request: &BuildRequest) -> Attempt {
+    let cells = plan(world, mode, request);
+    match placement_hold() {
+        Some(_) => Attempt::Held {
+            allowed: cells.len(),
+        },
+        None => Attempt::Cells(cells),
+    }
+}
+
+/// The action-bar reply to a held build click: the symbol it is blocked by and the honest
+/// count of what the gate would have allowed, so nothing is silently written.
+#[must_use]
+pub fn held_reply(allowed: usize) -> String {
+    let cells = if allowed == 1 { "cell" } else { "cells" };
+    format!(
+        "Building Gadget: held (blocked: {NO_CANCELLABLE_PLACEMENT}) - {allowed} {cells} would be allowed, 0 placed, 0 spent"
+    )
 }
 
 /// `BuildToMe.collectWorld`: every cell between the clicked block and the player
@@ -610,13 +678,18 @@ pub fn parse_command(line: &str) -> Option<GadgetCommand> {
     }
 }
 
-/// The action-bar reply to a status request.
+/// The action-bar reply to a status request. While [`placement_hold`] names a symbol it also
+/// says the build is held, so a player learns why a click does nothing before trying it.
 #[must_use]
 pub fn status_reply(mode: Mode, range: u32, selected: Option<&str>, place_on_top: bool) -> String {
     let selected = selected.unwrap_or("none");
     let on_top = if place_on_top { "on" } else { "off" };
+    let held = match placement_hold() {
+        Some(symbol) => format!(", placement held (blocked: {symbol})"),
+        None => String::new(),
+    };
     format!(
-        "Building Gadget: mode {}, range {range}, block {selected}, place-on-top {on_top}",
+        "Building Gadget: mode {}, range {range}, block {selected}, place-on-top {on_top}{held}",
         mode.path()
     )
 }
@@ -1084,11 +1157,13 @@ mod tests {
     fn replies_name_the_mode_range_and_selection() {
         assert_eq!(
             status_reply(Mode::Stairs, 5, Some("minecraft:stone"), false),
-            "Building Gadget: mode stairs, range 5, block minecraft:stone, place-on-top off"
+            "Building Gadget: mode stairs, range 5, block minecraft:stone, place-on-top off, \
+             placement held (blocked: no-cancellable-placement)"
         );
         assert_eq!(
             status_reply(Mode::BuildToMe, 1, None, true),
-            "Building Gadget: mode build_to_me, range 1, block none, place-on-top on"
+            "Building Gadget: mode build_to_me, range 1, block none, place-on-top on, \
+             placement held (blocked: no-cancellable-placement)"
         );
         assert_eq!(set_range_reply(5), "Building Gadget range set to 5");
         assert_eq!(
@@ -1140,9 +1215,97 @@ mod tests {
         let mut bordered = rights();
         bordered.border = Some([-100.0, -100.0, 100.0, 100.0]);
         assert!(may_edit([0, 100, 0], &bordered));
-        assert!(may_edit([100, 100, 100], &bordered), "on the edge");
+        assert!(may_edit([99, 100, 99], &bordered), "one cell inside");
         assert!(!may_edit([101, 100, 0], &bordered), "one block past x");
         assert!(!may_edit([0, 100, -101], &bordered), "one block past z");
+    }
+
+    /// The engine's border rule (`BorderGeometry::is_within_bounds(x, z, 0.0)`): the lower
+    /// edges are inclusive and the upper ones are **exclusive**, so the cell whose coordinate
+    /// equals `max` is outside. The old inclusive rule placed a block on the far edge.
+    #[test]
+    fn the_border_upper_edge_is_exclusive() {
+        let border = Some([0.0, 0.0, 16.0, 16.0]);
+        assert!(
+            inside_border([0, 64, 0], border),
+            "the lower edge is inclusive"
+        );
+        assert!(inside_border([15, 64, 15], border), "one cell inside");
+        assert!(!inside_border([16, 64, 15], border), "exactly on max_x");
+        assert!(!inside_border([15, 64, 16], border), "exactly on max_z");
+        assert!(!inside_border([17, 64, 15], border), "past max_x");
+        assert!(!inside_border([15, 64, -1], border), "below min_z");
+        assert!(inside_border([0, 64, 0], None), "no border allows");
+    }
+
+    /// The same edge through the gate the glue calls per destination: exactly on the upper
+    /// bound is refused, one cell inside is allowed.
+    #[test]
+    fn a_cell_exactly_on_the_border_upper_bound_is_refused() {
+        let mut bordered = rights();
+        bordered.border = Some([-100.0, -100.0, 100.0, 100.0]);
+        assert!(may_edit([99, 100, 99], &bordered), "one cell inside");
+        assert!(!may_edit([100, 100, 0], &bordered), "exactly on max_x");
+        assert!(!may_edit([0, 100, 100], &bordered), "exactly on max_z");
+        assert!(
+            may_edit([-100, 100, -100], &bordered),
+            "the lower edges are in"
+        );
+    }
+
+    /// The review finding: a build click places nothing while the pin has no placement call a
+    /// protection mod can cancel, even where every cell of the area is buildable.
+    #[test]
+    fn a_build_click_is_held_while_no_cancellable_placement_exists() {
+        let mut world = TestWorld::new();
+        world.block(clicked());
+        match build(
+            &mut world,
+            Mode::VerticalWall,
+            &request(south(), north(), false, 5),
+        ) {
+            Attempt::Held { allowed } => assert_eq!(allowed, 24, "25 cells minus the clicked one"),
+            Attempt::Cells(cells) => panic!(
+                "the gadget wrote {} cells through a raw write while placement is held \
+                 (blocked: {NO_CANCELLABLE_PLACEMENT})",
+                cells.len()
+            ),
+        }
+    }
+
+    /// A held click costs nothing: the reply says so, and it names the symbol the port records.
+    #[test]
+    fn a_held_click_says_it_placed_and_spent_nothing() {
+        assert_eq!(
+            held_reply(3),
+            "Building Gadget: held (blocked: no-cancellable-placement) - 3 cells would be \
+             allowed, 0 placed, 0 spent"
+        );
+        assert_eq!(
+            held_reply(1),
+            "Building Gadget: held (blocked: no-cancellable-placement) - 1 cell would be \
+             allowed, 0 placed, 0 spent"
+        );
+        assert_eq!(placement_hold(), Some(NO_CANCELLABLE_PLACEMENT));
+        assert_eq!(NO_CANCELLABLE_PLACEMENT, "no-cancellable-placement");
+    }
+
+    /// A held mode still counts what it would have built, so the gate stays observable.
+    #[test]
+    fn a_held_click_reports_the_cells_the_gate_would_allow() {
+        let mut world = TestWorld::new();
+        let row = |world: &mut TestWorld, range| {
+            build(
+                world,
+                Mode::HorizontalRow,
+                &request([0, 0, 1], [0, 0, 1], false, range),
+            )
+        };
+        assert_eq!(row(&mut world, 1), Attempt::Held { allowed: 1 });
+        assert_eq!(row(&mut world, 3), Attempt::Held { allowed: 3 });
+        // The clicked block itself is solid, so it is not one of the cells.
+        world.block(clicked());
+        assert_eq!(row(&mut world, 3), Attempt::Held { allowed: 2 });
     }
 
     /// The review finding: a row may not be placed across a dedicated server's spawn-protection

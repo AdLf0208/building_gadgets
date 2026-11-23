@@ -13,6 +13,14 @@ placed block. The anchor, undo, energy, bound inventories, the mode wheel and th
 GUI/tooltip, and the other gadgets (paste/rotate/cut/destruction/exchange) are
 later slices.
 
+> **0.2.4 holds the build.** A review item (protection must be able to cancel one
+> destination) cannot be met by this pin's API: there is no placement call that names
+> the acting player *and* lets a protection mod veto one position. A plain right click
+> therefore writes nothing and says so on the action bar
+> (`blocked: no-cancellable-placement`); selection, the eight mode plans, the range and
+> the commands stay live. The symbols checked and the issue shape that lifts the hold
+> are in [`## Review repair (0.2.4)`](#review-repair-024--the-placement-hold-and-the-borders-upper-edge).
+
 **Version 0.2.0 — the SDK package (history).** This port was migrated on 2026-11-18 from
 the retired `.hnmod` container to the flat SDK `.hmod` (Horizon's mod-API merge,
 #16941): one file carries the code (`src/`) **and** the carried content
@@ -800,4 +808,241 @@ builds byte-identical · `check`/`fits` exit 0.
 > centre-cell gate for `horizontal_wall` and its own sign rule for `stairs`. The
 > package re-pins to Nightly `0a875da` (mixins `e59da909`). Known gaps are otherwise
 > unchanged: no anchor or undo, no preview/animation queue, no energy, no bound
+> inventories, no mode wheel or GUI, and the other gadgets are later slices.
+
+## Review repair (0.2.4) — the placement hold and the border's upper edge
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-review
+
+Review: upstream PR **#1576**, reviewer **NikitaMGrimm** at `8b1ad188`, two items. This
+version answers both; the first one is a **deliberate behaviour reduction** the reviewer
+offered as the alternative when the pin has no cancellable placement path.
+
+### Item 1 — a protection mod cannot cancel a destination (the important one)
+
+The finding was that every generated destination was written with `LevelRef::set_block`
+(`src/support.rs`, the old `place`), so a protection mod could not veto an individual
+position. The reviewer allowed either an actor-aware, cancellable placement path for each
+destination, or holding the area modes. **The symbol check came back negative**, so the
+build is held.
+
+**What was checked** — the authoritative SDK at the campaign pin
+(`ports/_shared/sdk/0a875da/`: `surface.json` with 749 hooks / 215 traits / handles /
+functions, `api-source/crates/**`, and the pin's own `docs/mods.md`,
+`docs/native-mods.md`, `docs/modpacks.md`):
+
+| Symbol | Shape | Why it is not the veto point |
+|---|---|---|
+| `entity_place` hook (`api-source/crates/horizon-mod-vocab/src/hooks/entity_place.rs:1-8`) | **cancellable**, `placer: Option<EntityRef>`, `pos`, `state`, `placed_against`, `placement`; NeoForge's `BlockEvent.EntityPlaceEvent(s)` | This *is* the per-position veto a protection mod implements — but it is fired **only inside `BlockItem.place`** ("heard where `BlockItem.place` has found the position and state and checked survival, before anything is set"). A mod has no host call that fires it for a position it chose. |
+| `PlayerRef::place_block` (`api-source/crates/horizon-mod-vocab/src/host/players.rs:1146-1163`) | actor-aware: takes the player's turn, writes with a placement's flags, then `Block.setPlacedBy` | Its contract says *"Nothing else of vanilla's `BlockItem.place` or `useOn` runs: no check that the block may be placed there (survival, entity obstruction, build permission, spawn protection) … The player is only whose turn `setPlacedBy` runs in, so it is not 'as player' in the sense of a use-on."* So `entity_place` never hears it: the same bypass with a player's name on it. |
+| `PlayerRef::perform_action` / `perform_action_scoped` (`…/host/players.rs:786-810`) | the **only** call documented to run "reach, protection and the border, then the action", and the pre-hooks (so `entity_place` and a mod's veto do run) | fake-player only: `ActionRefused::NotFake` is documented as *"The handle is a real player's."* (`…/backend.rs:9-14`). A gadget held by a real player cannot use it, and `PlayerActionSetup` acts through "the existing fake" — a mod cannot create one (`PlayerRef::is_fake` / `remove_fake` only). |
+| `LevelRef::set_block` (`…/host/levels.rs:915-928`), `world_edit().edit_blocks` | actor-free write / bulk write | what the port did; no permission, no hook, no per-cell answer. |
+| `PlayerRef::may_use_item_at` | `Player.mayUseItemAt` for one position | vanilla's own gate (adventure `can_place_on`), already used by `runtime::may_edit`; no third-party veto. |
+| hook names matching `place\|permission\|protect\|alter\|lock` in `surface.json` | — | `entity_place` and `on_block_placed_by`/`state_for_placement`/`may_place_on`/`fluid_place_block`/`block_lock_check` are the only near misses; none asks *"may this actor write here"* per position. `block_lock_check` is a guest's block **inventory** lock. |
+| `mod_api::dispatch_entity_place` (`…/generated/mod_api_generated.rs:15323`) | the engine's own dispatcher | `#[doc(hidden)]` and **absent from `surface.json`** (0 hits): unstamped plumbing, not a mod-callable path, and the campaign's rule is stamped APIs only. |
+
+**Why holding is a regression, not fidelity.** Upstream's `BuildingUtils.build` asks
+`level.mayInteract(player, pos)` *and* fires the NeoForge place event for every cell
+(`FINDINGS.md` → "Build and payment"), so a per-cell veto is what the mod means to do; the
+pin simply offers no call that fires that event for a position a mod chose. The vanilla
+half of that check (`mayInteract`: build permission, `mayUseItemAt`, the border, spawn
+protection) is ported per destination in `runtime::may_edit`.
+
+**What the port does instead.** `runtime::placement_hold()` returns
+`Some(NO_CANCELLABLE_PLACEMENT)` while that is true, and `runtime::build()` turns a click
+into `Attempt::Held { allowed }` instead of `Attempt::Cells`. The glue then writes
+nothing, spends nothing, and answers on the action bar:
+
+```
+Building Gadget: held (blocked: no-cancellable-placement) - 24 cells would be allowed, 0 placed, 0 spent
+```
+
+and `/buildinggadgets2` ends its status line with `, placement held (blocked:
+no-cancellable-placement)` so a player learns why before clicking. The **plan still runs**
+(it only reads the world), so the reply reports the cells the per-destination gate would
+have allowed: that keeps the gate — and the world border, item 2 — observable in game while
+the write is held, and it means the eight mode planners stay proven.
+
+What stays live: the item, its recipe/advancement/tab/model/texture/lang, sneak-click
+selection into the `buildinggadgets2:gadget_state` component, `/buildinggadgets2
+mode|range|placeontop`, the mouse-wheel range step, the status readout and all eight mode
+plans. What is held: the block writes, and with them the item payment.
+
+**Lifting the hold** is one line (`placement_hold` → `None`) once the pin can write a
+position as the acting player and report a listener's cancellation. The issue shape is
+recorded under `### Gaps` below.
+
+### Item 2 — the world border's upper X and Z bounds are exclusive
+
+`runtime::inside_border` compared `x <= max_x && z <= max_z`. The engine's rule is
+`BorderGeometry::is_within_bounds(x, z, margin)`
+(`horizon/crates/horizon-core/src/geometry/border.rs:240-243`, vanilla
+`WorldBorder.isWithinBounds` at zero margin): `x >= min_x - margin && x < max_x + margin`
+— **lower edges inclusive, upper edges exclusive**. The port now uses `x >= min_x && x <
+max_x && z >= min_z && z < max_z`. `runtime::may_edit`'s "on the edge is allowed"
+assertion in `a_cell_outside_the_border_is_refused` had encoded the defect and was
+corrected with it.
+
+### Red → green (quoted)
+
+The five new tests and the corrected border assertion were run **first** against the
+pre-fix code: `inside_border` still inclusive, `placement_hold()` stubbed to `None` (the
+old behaviour, "placement is available"). Verbatim, from
+`ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.4.log` (`EXIT:101`):
+
+```
+---- runtime::tests::a_build_click_is_held_while_no_cancellable_placement_exists stdout ----
+thread 'runtime::tests::a_build_click_is_held_while_no_cancellable_placement_exists' panicked at src/runtime.rs:1264:38:
+the gadget wrote 24 cells through a raw write while placement is held (blocked: no-cancellable-placement)
+
+---- runtime::tests::a_cell_exactly_on_the_border_upper_bound_is_refused stdout ----
+thread 'runtime::tests::a_cell_exactly_on_the_border_upper_bound_is_refused' panicked at src/runtime.rs:1247:9:
+exactly on max_x
+
+test result: FAILED. 29 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+Green: **35 passed, 0 failed** (`sdk-test.log`). The new tests are
+`a_build_click_is_held_while_no_cancellable_placement_exists`,
+`a_held_click_says_it_placed_and_spent_nothing`,
+`a_held_click_reports_the_cells_the_gate_would_allow`,
+`the_border_upper_edge_is_exclusive`,
+`a_cell_exactly_on_the_border_upper_bound_is_refused`, plus the corrected
+`a_cell_outside_the_border_is_refused` and the two reply tests.
+
+### In game (fail-capable, on the delivered bytes)
+
+`tools/e2e.sh` launches an `--offscreen` survival world, crafts the carried recipe in a
+real crafting table (missing-lapis control empty), then runs **9 mode phases and 2 border
+phases**. Every phase asserts three things that can each fail: the world scan shows **no
+block written**, the stone count is **unchanged**, and the parsed action bar is **exactly**
+the held reply for that mode's cell count. The counts are the cell sets the *previous*
+version proved by placing them, derived from `util/modes/*.java`, so a mode that plans the
+wrong shape fails on the number, not on a generic message.
+
+The "no block written" assertion scans the same box (`-8 147 -8` to `8 166 8`, stone
+only, minus the clicked cell) and uses the same filter that **observed** 0.2.3's
+placements (5, 24, 9 … cells in `retired-0.2.3/e2e-modes.log`), so it is not a blind
+scan; the SELFTEST run additionally requires `[[99,99,99]]` to fail against it.
+
+Quoted from `ports/_shared/evidence/buildinggadgets2-e2e/e2e-hold.log`:
+
+```
+== phase build_to_me: mode default, range 5, place-on-top off ==
+  placed: []
+  consumed: 0 stone
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 3 cells would be allowed, 0 placed, 0 spent
+== phase vertical_wall: mode vertical_wall, range 5, place-on-top off ==
+  placed: []
+  consumed: 0 stone
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 24 cells would be allowed, 0 placed, 0 spent
+== border phase edge_at_the_upper_bound: worldborder size 4, upper x edge at 2 ==
+  worldborder get: The world border is currently 4 block(s) wide
+  placed: []
+  consumed: 0 stone
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 19 cells would be allowed, 0 placed, 0 spent
+== border phase one_cell_inside_the_bound: worldborder size 6, upper x edge at 3 ==
+  worldborder get: The world border is currently 6 block(s) wide
+  placed: []
+  consumed: 0 stone
+  reply: Building Gadget: held (blocked: no-cancellable-placement) - 24 cells would be allowed, 0 placed, 0 spent
+PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; and the world border's upper edge refused the cell exactly on it while allowing it one cell inside
+EXIT:0
+```
+
+**The border differential.** `vertical_wall` at range 5 around the clicked block puts its
+cells at `x = -2..2`, `y = 148..152`, `z = 0`. A border centred at `(0,0)` of size 4 ends
+at **x = 2**, so that column is *exactly on the upper bound*: 4 columns × 5 rows − the
+clicked cell = **19**. Size 6 ends at x = 3, so the same column is *one cell inside* and
+allowed: 5 × 5 − 1 = **24**. Under the old inclusive rule both would have been 24 (size 4
+would have allowed x = 2) and 24, so the 19 is the fix, measured in game, not inferred.
+Both legs print the border size the server reports and the player's position.
+
+**Legs.** modded `PASS` + `EXIT:0`; control (`GAME=$CONTROL_GAME`, the same Nightly without
+the package) `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` — the gadget id
+does not exist without the package, so the PASS is not vacuous; `SELFTEST=1` inverts every
+phase (one block written, one cell too many in the reply) and **all 11 phases reject** it:
+`FAIL: SELFTEST: all 11 phases rejected a deliberately wrong expectation (22 assertions)`
++ `EXIT:1`. `check-e2e-logs.py buildinggadgets2-e2e --strict` → **3/3**. The pre-0.2.4
+mode logs moved to `ports/_shared/evidence/buildinggadgets2-e2e/retired-0.2.3/`: they
+describe a build that wrote blocks, which this version does not.
+
+### Coverage — every family in the jar (0.2.4)
+
+| Family | Status |
+|---|---|
+| `build_to_me` (default) | plan tested — phase `build_to_me`, 3 cells would be allowed, 0 written |
+| `vertical_wall` | plan tested — phase `vertical_wall`, 24 cells would be allowed |
+| `vertical_column` | plan tested — phase `vertical_column`, 4 |
+| `surface` | plan tested — phase `surface`, 1 |
+| `horizontal_wall` | plan tested — phase `horizontal_wall` (range 3), 9 |
+| `stairs` | plan tested — phase `stairs`, 4 |
+| `horizontal_row` | plan tested — phase `horizontal_row`, 4 |
+| `grid` / `place_on_top` | plan tested — phases `grid` (8) and `grid_on_top` (9) |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| per-destination placement gate | tested — `may_edit`/`inside_border` units + border phases (upper edge at 19 vs 24) |
+| mode/range/placeontop/status replies | tested — replied by value, status names the hold |
+| carried recipe | tested — crafted in a table; ingredients consumed; missing-lapis control empty |
+| gadget item | tested — crafted, given, selected, held; unknown in the control game |
+| anchor, undo, energy | not ported — no anchor/undo list and no FE hook on the gadget |
+| preview, per-tick queue, retry | not ported — see the gaps |
+| bound inventory / AE2 / Curios | not ported — payment walks the main inventory |
+| mode wheel, GUI, tooltip | not ported — the mode is a command; the screen is client work |
+| paste/rotate/cut/destruction/exchange gadgets | not ported — later slices |
+
+### Gaps (0.2.4)
+
+The list under `### Gaps (current, 0.2.3)` still holds, with one change and one addition:
+
+- **The block writes are held — `blocked(no-cancellable-placement)`.** A plain right
+  click plans its cells and writes none, so no item is paid. This lasts until the pin has
+  a placement path that names the acting player, runs vanilla's own placement gate, fires
+  the listeners that may veto it, and answers whether one did. The symbols checked are in
+  the table above; the two that come closest are `PlayerRef::place_block` (actor-aware, no
+  protection) and `PlayerRef::perform_action` (protection and hooks, fake players only).
+  **Issue shape:** *"A host call that writes one block as the acting player through
+  vanilla's placement path — the `mayInteract` gate, `entity_place` listeners, then
+  `setPlacedBy` — and answers `Placed`/`Cancelled`/`Refused`, so a builder can skip one
+  cell instead of writing through a protection mod."* It also lifts the upstream-recipe
+  limitation below, because the same call runs `BlockItem.place`'s rules.
+- **Still no `canSurvive` pre-check** (0.2.3's first gap). It matters less while the write
+  is held; it comes back with it.
+
+### Verification (0.2.4)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **35 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.4.log`, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | exit 0 (`sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **40,798 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.4 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da` | `0a875da  made for` (`sdk-fits.log`) |
+| `fits --build 0b14f8a` | `0b14f8a  fits` — a different build, so the pin run is not a tautology (`sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 |
+| e2e (modded, delivered bytes) | `PASS` + `EXIT:0` (`e2e-hold.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` (`e2e-hold-control.log`) |
+| e2e (`SELFTEST=1`) | 11/11 phases rejected, `FAIL` + `EXIT:1` (`e2e-hold-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 3/3 |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **40,798 B**, sha256
+`927409d7750cc246e1e98630b6355bc9e90ba6c7cdf17c80f9e87bb05066f14a`, **18 entries**, no
+packed `Cargo.lock`; declared version **0.2.4**.
+
+### Changelog (0.2.4)
+
+> **Building Gadgets 2 0.2.4** — two review repairs. (1) The gadget no longer writes
+> blocks: this pin has no placement call that names the acting player *and* lets a
+> protection mod cancel one position (`PlayerRef::place_block` is actor-aware but runs
+> none of `BlockItem.place`'s protection; `PlayerRef::perform_action` is fake-player only;
+> the cancellable `entity_place` hook only fires inside `BlockItem.place`), so a plain
+> right click places nothing, spends nothing and says `blocked:
+> no-cancellable-placement` with the number of cells the player's own gate would have
+> allowed. Selection, all eight mode plans, the range/mode/place-on-top commands and the
+> status readout keep working, and the hold is one constant away from lifting. (2) The
+> world border's upper X/Z edges are now exclusive, as the engine's
+> `BorderGeometry::is_within_bounds` is, so the cell exactly on the bound is refused and
+> the one cell inside is allowed (proved in game: 19 vs 24 cells). Known gaps are
+> otherwise unchanged: no anchor or undo, no preview/animation queue, no energy, no bound
 > inventories, no mode wheel or GUI, and the other gadgets are later slices.

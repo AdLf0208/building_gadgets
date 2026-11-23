@@ -1,13 +1,17 @@
 id = "buildinggadgets2"
 name = "Building Gadgets 2"
-version = "0.2.3"
-description = """A port of Building Gadgets 2 for Horizon: the building gadget with all eight of its modes.
-Sneak + right click selects the clicked block's state; a plain right click builds in the selected mode
-(build-to-me, vertical wall, vertical column, surface, horizontal wall, stairs, horizontal row or grid),
-bounded by the tool range (1..15, set with /buildinggadgets2 range or the mouse wheel) and by
-/buildinggadgets2 mode, skipping cells that are not replaceable, and paying one item of the block's kind
-per placed cell. /buildinggadgets2 placeontop toggles the PLACE_ON_TOP setting. The anchor, undo, energy,
-and the paste/rotate/cut/destruction/exchange gadgets and their screens are not ported yet."""
+version = "0.2.4"
+description = """A port of Building Gadgets 2 for Horizon. The building gadget's item, recipe, selection
+(sneak + right click stores the clicked block's state in the item's buildinggadgets2:gadget_state
+component) and all eight modes (build-to-me, vertical wall, vertical column, surface, horizontal
+wall, stairs, horizontal row, grid) with the 1..15 range, /buildinggadgets2 mode|range|placeontop
+and the mouse-wheel range step are ported. The build itself is HELD in this version: the SDK has
+no placement call that names the acting player and lets a protection mod cancel one position, so
+a click writes no block and spends no item, and says so on the action bar with the symbol
+`blocked: no-cancellable-placement`. Every destination also passes the player's own placement gate
+(build permission, mayUseItemAt, the world border with its exclusive upper edges, and a dedicated
+server's spawn protection). The anchor, undo, energy, and the paste/rotate/cut/destruction/exchange
+gadgets and their screens are not ported yet."""
 authors = ["Direwolf20-MC", "AdLf0208"]
 # Licence of the original (MIT, Direwolf20-MC/BuildingGadgets2); the text and the
 # original copyright notice travel inside the package as LICENSE / LICENSE-NOTICE.md.
