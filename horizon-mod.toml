@@ -1,13 +1,17 @@
 id = "buildinggadgets2"
 name = "Building Gadgets 2"
-version = "0.2.5"
+version = "0.2.6"
 description = """A port of Building Gadgets 2 for Horizon. The building gadget's item, recipe, selection
 (sneak + right click stores the clicked block's state in the item's buildinggadgets2:gadget_state
 component) and all eight modes (build-to-me, vertical wall, vertical column, surface, horizontal
 wall, stairs, horizontal row, grid) with the 1..15 range, /buildinggadgets2 mode|range|placeontop
-and the mouse-wheel range step are ported. The mod's own buildinggadgets2:deny block tag is carried
-and read: a sneak click on one of its members answers Invalid Block, and a build destination whose
-block the tag names is refused. The build itself is HELD in this version: the SDK has
+and the mouse-wheel range step are ported. A sneak click stores upstream's cleaned state
+(GadgetUtils.cleanBlockState): a transient property (a crop's age, a furnace's lit, a door's open,
+...) is stored at the block's default while the orientation ones (facing, axis, hinge, powered,
+shape, ...) are carried over, and /buildinggadgets2 names the stored state string. The mod's own
+buildinggadgets2:deny block tag is carried and read: a sneak click on one of its members answers
+Invalid Block, and a build destination whose block the tag names is refused. The build itself is
+HELD in this version: the SDK has
 no placement call that names the acting player and lets a protection mod cancel one position, so
 a click writes no block and spends no item, and says so on the action bar with the symbol
 `blocked: no-cancellable-placement`. Every destination also passes the player's own placement gate

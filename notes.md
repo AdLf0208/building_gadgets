@@ -1011,6 +1011,10 @@ The list under `### Gaps (current, 0.2.3)` still holds, with one change and one 
 *Closed by 0.2.5:* the `buildinggadgets2:deny` tag (gap of 0.2.3, repeated in 0.1.0) is carried and
 read — see [`## Slice 4`](#slice-4--the-buildinggadgets2deny-tag-2026-11-23-version-025).
 
+*Closed by 0.2.6:* the **whole state string** as the selection (gap of 0.2.3, repeated in 0.2.4/0.2.5)
+is cleaned as upstream's `cleanBlockState` does — see
+[`## Slice 5`](#slice-5--cleanblockstate-on-the-selection-2026-11-23-version-026).
+
 ### Verification (0.2.4)
 
 | Check | Result |
@@ -1331,3 +1335,183 @@ plus `data/buildinggadgets2/tags/block/deny.json`), no packed `Cargo.lock`; decl
 > destinations and 6 once the tag names snow). The selection rules (`isValidBlockState`) moved into the
 > pure, unit-tested planner. The build stays held (`blocked: no-cancellable-placement`), the preview
 > stays `blocked(no-client-held-stack-components)`, and the other gaps are unchanged.
+
+## Slice 5 — `cleanBlockState` on the selection (2026-11-23, version 0.2.6)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Gaps (current, 0.2.3)`: "*Selection stores the whole state string*, so transient
+properties (age, lit, waterlogged, open, …) are not cleaned as upstream's `cleanBlockState` does;
+orientation properties are preserved." It is the selection path only — no placement call — so the
+slice does not touch the 0.2.4 hold.
+
+**What upstream does.** `GadgetBuilding.onShiftAction` → `GadgetUtils.setBlockState` →
+`GadgetUtils.cleanBlockState` (`GadgetUtils.java:109-118`): start from
+`sourceState.getBlock().defaultBlockState()` and apply every property of the clicked state **except**
+those in `DENY_PROPERTIES` (`GadgetUtils.java:53-58`). The list, read from the jar verbatim, is
+
+| Property | Values | What it is |
+|---|---:|---|
+| `age` (8 instances) | 2, 3, 4, 5, 6, 8, 16, 26 | `AGE_1`, `AGE_2`, `AGE_3`, `AGE_4`, `AGE_5`, `AGE_7`, `AGE_15`, `AGE_25` |
+| `half` | 2 | `DoublePlantBlock.HALF` (lower/upper, and the stair/slab bottom/top) |
+| `waterlogged` | 2 | `WATERLOGGED` |
+| `lit` | 2 | `LIT` |
+| `has_record` | 2 | `HAS_RECORD` |
+| `has_book` | 2 | `HAS_BOOK` |
+| `open` | 2 | `OPEN` |
+| `stage` | 2 | `STAGE` |
+
+Everything else is carried over: `facing`, `axis`, `hinge`, `powered`, `shape`, `type`, `rotation`,
+`half`-of-a-stair apart, `snowy`, `north/east/south/west` (a fence's connections), … Upstream compares
+property **instances**, and `age` is eight of them; `BlockStateProperties` has no `AGE_6`, so a
+mod-declared seven-valued `age` survives. The port carries the same identity as (name, value count),
+which is exact for every single-instance entry (all two-valued) and for the eight `age` instances.
+
+**What shipped.**
+
+1. **`runtime`** now holds the whole rule, pure: `PropertyFacts` (name + value count),
+   `denied_property(name, values)`, `parse_state`, and `clean_block_state(source, default,
+   definition)`, which starts from the default state's properties, drops the denied ones, carries the
+   rest and serializes in name order. A property the definition does not name is **kept**, so a host
+   without metadata tables stores the state as 0.2.5 did instead of erasing its orientation.
+2. **`support`**: `stored_state` reads the game's own metadata — `BlockStates::definition`
+   (`handle:BlockStates::definition`, stamped), `block_state_default` (`Block.defaultBlockState`,
+   `prelude::BlockStatesHost::block_state_default`, stamped), `block_state_string`/`block_state_id` —
+   so the sneak click stores `clean_block_state`'s result in the game's canonical form. A fact the
+   host cannot answer falls back to the raw state.
+3. **The readout**: `/buildinggadgets2` now prints the **stored state string** (`block
+   minecraft:furnace[facing=west,lit=false]`) instead of the block id alone, so the cleaning is
+   observable in game. A block with no properties still reads as its id (`block minecraft:stone`), so
+   every earlier reply assertion is unchanged.
+
+**Red → green (unit).** The five new tests were run first against 0.2.5's behaviour stubbed in
+(`denied_property -> false`, `clean_block_state -> Some(source)`), from
+`ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.6-clean.log` (`EXIT:101`), **42 passed, 5
+failed**:
+
+```
+---- runtime::tests::cleaning_a_door_drops_half_and_open_and_keeps_facing_and_hinge stdout ----
+thread 'runtime::tests::cleaning_a_door_drops_half_and_open_and_keeps_facing_and_hinge' panicked at src/runtime.rs:1567:9:
+assertion `left == right` failed: half=upper and open=true are dropped; facing, hinge and powered survive
+  left: Some("minecraft:oak_door[facing=east,half=upper,hinge=right,open=true,powered=true]")
+ right: Some("minecraft:oak_door[facing=east,half=lower,hinge=right,open=false,powered=true]")
+
+---- runtime::tests::the_deny_list_is_upstreams_property_instances stdout ----
+thread 'runtime::tests::the_deny_list_is_upstreams_property_instances' panicked at src/runtime.rs:1516:13:
+age with 2 values is one of upstream's AGE instances
+
+test result: FAILED. 42 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Green: **47 passed, 0 failed** (`sdk-test.log`). The six new tests are
+`the_deny_list_is_upstreams_property_instances`,
+`cleaning_a_door_drops_half_and_open_and_keeps_facing_and_hinge` (the gap line's door: `half=upper`
+and `open=true` dropped, `facing`, `hinge` and `powered` carried),
+`cleaning_a_crop_resets_its_age_and_keeps_a_mods_own` (a wheat's `AGE_7` reset; a seven-valued
+`age` kept), `cleaning_keeps_orientation_and_shape` (stairs: `facing`/`shape` kept, `half`/
+`waterlogged` cleaned; stone has no properties), `cleaning_refuses_malformed_text_and_keeps_everything_without_metadata`
+and `the_status_reply_names_the_stored_state_string`.
+
+### In game (fail-capable, on the delivered bytes)
+
+Two phases in `tools/e2e.sh`, quoted from `ports/_shared/evidence/buildinggadgets2-e2e/e2e-clean.log`:
+
+```
+== clean phase clean_selection: a lit furnace's lit=true is dropped, facing=west survives ==
+  furnace at 2 151 4: minecraft:furnace[facing=west,lit=true]
+  selection reply: Selected minecraft:furnace
+  status: Building Gadget: mode grid, range 5, block minecraft:furnace[facing=west,lit=false], place-on-top off, placement held (blocked: no-cancellable-placement)
+== clean phase clean_transient: a ripe wheat's age=7 is transient, the default age=0 is stored ==
+  wheat at 2 151 4: minecraft:wheat[age=7]
+  selection reply: Selected minecraft:wheat
+  status: Building Gadget: mode grid, range 5, block minecraft:wheat[age=0], place-on-top off, placement held (blocked: no-cancellable-placement)
+EXIT:0
+```
+
+Each phase first **reads and asserts the state it is about to click** (`lit=true`, `facing=west`;
+`age=7`), so the expectation cannot hold vacuously on a block that never carried the transient
+value. `SELFTEST=1` expects 0.2.5's raw state there and every one of the **16 phases** rejects it
+(`32 assertions`, `FAIL` + `EXIT:1`, `e2e-clean-selftest.log`); the control game without the package
+fails at the recipe (`EXIT:1`, `e2e-clean-control.log`).
+
+**Why the in-game block is a furnace and not the gap line's door.** The carried
+`buildinggadgets2:deny` tag names `#minecraft:doors` (0.2.5), so since 0.2.5 a door cannot be
+selected at all — the selection answers `Invalid Block`. A world data pack can only *add* to a tag:
+the probe run (`ports/_shared/evidence/buildinggadgets2-e2e/probe-door.sh`, quoted in
+`probe-door.log`) re-declared the tag as `{"values":[]}`, reloaded, and the doors were still refused,
+so the door can never reach
+`cleanBlockState` through a sneak click. Its own cleaning is pinned by the unit test named above, and
+the game assertion uses a full cube the tag lets through (`lit` denied, `facing` kept — one denied
+and one kept property, both off their defaults). An open door's leaf is also a thin plate: the probe
+measured that with `facing=west` it stands at the block's south edge, so only a click from the north
+reaches it — recorded here so a later slice does not re-derive it.
+
+### Coverage — every family in the jar (0.2.6)
+
+Replaces the 0.2.5 table; unchanged rows are the same verdicts.
+
+| Family | Status |
+|---|---|
+| `build_to_me` (default), `vertical_wall`, `vertical_column`, `surface`, `horizontal_wall`, `stairs`, `horizontal_row`, `grid`, `place_on_top` | plan tested — phases as in 0.2.4, 0 written, 0 spent |
+| `cleanBlockState` — a denied property | tested — phase `clean_selection` (`lit=true` → `lit=false`), `clean_transient` (`age=7` → `age=0`); unit `cleaning_a_crop_resets_its_age_and_keeps_a_mods_own` |
+| `cleanBlockState` — a kept property | tested — `facing=west` survives in `clean_selection`; `facing`/`hinge`/`powered` in the door unit test; `shape` in the stairs unit test |
+| `cleanBlockState` — `age` instances | unit tested — the eight arities denied, a seven-valued `age` kept |
+| the status readout | tested — `/buildinggadgets2` names the stored state string; every earlier reply still asserted by value |
+| `buildinggadgets2:deny` — **selection** | tested — phase `deny_selection`: `Invalid Block`, `minecraft:stone` still selected, held count 8 unchanged |
+| `buildinggadgets2:deny` — **destination** | tested — phases `deny_destination_control` (8) and `deny_destination` (6) in one run |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| per-destination placement gate | tested — `may_edit`/`inside_border` units + border phases (19 vs 24) |
+| mode/range/placeontop/status replies | tested — replied by value, status names the hold |
+| carried recipe | tested — crafted in a table; ingredients consumed; missing-lapis control empty |
+| gadget item | tested — crafted, given, selected, held; unknown in the control game |
+| anchor, undo, energy | not ported — no anchor/undo list and no FE hook on the gadget |
+| preview, per-tick queue, retry | not ported — the preview is `blocked(no-client-held-stack-components)` (parked slice, see above) |
+| bound inventory / AE2 / Curios | not ported — payment walks the main inventory |
+| mode wheel, GUI, tooltip | not ported — the mode is a command; the screen is client work |
+| paste/rotate/cut/destruction/exchange gadgets | not ported — later slices (the exchange gadget is the tag's other consumer) |
+
+### Gaps (0.2.6)
+
+The list under `### Gaps (current, 0.2.3)` holds with one closure and no additions: the whole-state
+selection is cleaned (above). The block writes stay held (`blocked: no-cancellable-placement`) and the
+preview stays `blocked(no-client-held-stack-components)`; the remaining families are unchanged (no
+anchor/undo/energy, no bound inventories, no GUI or mode wheel, no preview queue and no other gadget).
+
+### Verification (0.2.6)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **47 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.6-clean.log`, 42/5, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | exit 0 (`sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **48,042 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.6 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` | `0a875da  made for` (`sdk-fits.log`) |
+| `fits --build 0b14f8a…` | `0b14f8a  fits` — a different build, so the pin run is not a tautology (`sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 (`package matches the tree`) |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| e2e (modded, delivered bytes) | `PASS` + `EXIT:0`, 16 phases (`e2e-clean.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the carried gadget recipe did not craft…` + `EXIT:1` (`e2e-clean-control.log`) |
+| e2e (`SELFTEST=1`) | 16/16 phases rejected, `FAIL` + `EXIT:1`, 32 assertions (`e2e-clean-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | **10/10** (the 0.2.5 deny-tag legs still green) |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **48,042 B**, sha256
+`6885766f687e20941f3538a5576bfdf3a31ee5e97bcc41f18c15c23b08d0c857`, **19 entries** (the deny tag
+included), no packed `Cargo.lock`; declared version **0.2.6**; `src/runtime.rs` sha256
+`0c2de1593d8b…` in the tree and in the archive. The game leg was rebuilt from this tree after the
+docs were written (`Compiling buildinggadgets2 (1 of 1)`), so the bytes under test are the bytes
+delivered.
+
+### Changelog (0.2.6)
+
+> **Building Gadgets 2 0.2.6** — a sneak click now stores upstream's *cleaned* block state
+> (`GadgetUtils.cleanBlockState`): the transient properties upstream lists (a crop's `age` — all eight
+> `AGE_*` instances, a door's or stair's `half`, `open`, `waterlogged`, `lit`, `has_record`,
+> `has_book`, `stage`) are stored at the block's own default, while the orientation ones (`facing`,
+> `axis`, `hinge`, `powered`, `shape`, `type`, …) are carried over, and `/buildinggadgets2` names the
+> stored state string so you can see it. Proved in game: a lit furnace is stored as
+> `minecraft:furnace[facing=west,lit=false]` and a ripe wheat as `minecraft:wheat[age=0]`, each with
+> the clicked state asserted first, and 0.2.5's raw state is the inverted expectation every phase
+> rejects. The build stays held (`blocked: no-cancellable-placement`), the preview stays
+> `blocked(no-client-held-stack-components)`, and the other gaps are unchanged.

@@ -143,6 +143,132 @@ pub fn selectable(
         && fluid.is_none_or(|fluid| fluid.amount == 0 || fluid.source)
 }
 
+/// One property of a block's state as the game publishes it: its name and how many values it
+/// allows. The count is part of upstream's identity: `GadgetUtils.DENY_PROPERTIES` lists eight
+/// distinct `IntegerProperty` instances named `age`, so `AGE_7` (eight values) is denied while a
+/// mod's own seven-valued `age` is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropertyFacts {
+    /// The property's name, as the state string spells it (`half`, `waterlogged`, `age`).
+    pub name: String,
+    /// How many values the property allows (`BlockStateProperties.AGE_7` has eight).
+    pub values: usize,
+}
+
+/// The `age` properties upstream lists: `AGE_1`, `AGE_2`, `AGE_3`, `AGE_4`, `AGE_5`, `AGE_7`,
+/// `AGE_15` and `AGE_25`, whose value counts are these. `BlockStateProperties` has no `AGE_6`, and a
+/// mod's own seven-valued `age` occupies no listed instance.
+const DENIED_AGE_VALUES: [usize; 8] = [2, 3, 4, 5, 6, 8, 16, 26];
+
+/// The single two-valued properties upstream lists, by the name the state string spells:
+/// `DoublePlantBlock.HALF`, `WATERLOGGED`, `LIT`, `HAS_RECORD`, `HAS_BOOK`, `OPEN` and `STAGE`.
+const DENIED_TWO_VALUED: [&str; 7] = [
+    "half",
+    "waterlogged",
+    "lit",
+    "has_record",
+    "has_book",
+    "open",
+    "stage",
+];
+
+/// Whether upstream's `cleanBlockState` drops `name`: the property is one of its
+/// `DENY_PROPERTIES` (`GadgetUtils.java:53-58`). Upstream compares property instances, so the value
+/// count is part of the identity; a name the list does not carry is kept, whatever its values.
+#[must_use]
+pub fn denied_property(name: &str, values: usize) -> bool {
+    if name == "age" {
+        DENIED_AGE_VALUES.contains(&values)
+    } else {
+        values == 2 && DENIED_TWO_VALUED.contains(&name)
+    }
+}
+
+/// A serialized block state split into its block id and its property list, as the game writes it
+/// (`minecraft:oak_door[facing=east,half=upper,…]`, or the block alone for a state with none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateText<'a> {
+    /// The block id the state belongs to (`minecraft:oak_door`).
+    pub block: &'a str,
+    /// The state's properties, in the order the text lists them.
+    pub properties: Vec<(&'a str, &'a str)>,
+}
+
+/// Split a state string into its block id and properties; `None` for text the game did not write.
+#[must_use]
+pub fn parse_state(text: &str) -> Option<StateText<'_>> {
+    let text = text.trim();
+    let (block, list) = match text.strip_suffix(']') {
+        Some(body) => {
+            let (block, list) = body.split_once('[')?;
+            (block, Some(list))
+        }
+        None => (text, None),
+    };
+    if block.is_empty() || block.contains('[') {
+        return None;
+    }
+    let mut properties = Vec::new();
+    if let Some(list) = list {
+        if list.is_empty() {
+            return None;
+        }
+        for pair in list.split(',') {
+            let (name, value) = pair.split_once('=')?;
+            if name.is_empty() || value.is_empty() {
+                return None;
+            }
+            properties.push((name, value));
+        }
+    }
+    Some(StateText { block, properties })
+}
+
+/// `GadgetUtils.cleanBlockState`: the block's default state with every property upstream's
+/// `DENY_PROPERTIES` does not name carried over from `source`, so a transient value (a crop's age, a
+/// door's open, a stair's half, a log's waterlogged) is stored as a fresh block has it and the
+/// orientation ones (facing, axis, hinge, powered, shape, rotation, …) survive.
+///
+/// `default` is `Block.defaultBlockState` and `definition` the block's property list with its value
+/// counts; a property `definition` does not name is kept, so a host without metadata tables stores
+/// the state as it was read instead of erasing its orientation. `None` when either text is not a
+/// state or the two belong to different blocks.
+#[must_use]
+pub fn clean_block_state(
+    source: &str,
+    default: &str,
+    definition: &[PropertyFacts],
+) -> Option<String> {
+    let source = parse_state(source)?;
+    let default = parse_state(default)?;
+    if source.block != default.block {
+        return None;
+    }
+    let mut properties: Vec<(&str, &str)> = default.properties.clone();
+    for (name, value) in &source.properties {
+        let denied = definition
+            .iter()
+            .find(|property| property.name == *name)
+            .is_some_and(|property| denied_property(name, property.values));
+        if denied {
+            continue;
+        }
+        if let Some(held) = properties.iter_mut().find(|(held, _)| held == name) {
+            held.1 = value;
+        }
+    }
+    properties.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    if properties.is_empty() {
+        return Some(source.block.to_owned());
+    }
+    let list = properties
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!("{}[{list}]", source.block))
+}
+
 /// A wheel step on the gadget: upstream's slider moves one block per notch and
 /// clamps to 1..=15. Positive `steps` (scroll up) increases the range.
 #[must_use]
@@ -717,8 +843,10 @@ pub fn parse_command(line: &str) -> Option<GadgetCommand> {
     }
 }
 
-/// The action-bar reply to a status request. While [`placement_hold`] names a symbol it also
-/// says the build is held, so a player learns why a click does nothing before trying it.
+/// The action-bar reply to a status request. `selected` is the state string the gadget's component
+/// holds (`minecraft:stone`, or `minecraft:oak_door[facing=east,…]` once cleaned), so the readout
+/// shows exactly what a build would place. While [`placement_hold`] names a symbol it also says the
+/// build is held, so a player learns why a click does nothing before trying it.
 #[must_use]
 pub fn status_reply(mode: Mode, range: u32, selected: Option<&str>, place_on_top: bool) -> String {
     let selected = selected.unwrap_or("none");
@@ -1468,5 +1596,169 @@ mod tests {
         assert!(denied(Some(true)), "a denied destination");
         assert!(!denied(Some(false)), "an ordinary destination");
         assert!(!denied(None), "an unloaded tag table writes as before");
+    }
+
+    fn facts(name: &str, values: usize) -> PropertyFacts {
+        PropertyFacts {
+            name: name.to_owned(),
+            values,
+        }
+    }
+
+    /// Upstream's `DENY_PROPERTIES` (`GadgetUtils.java:53-58`), read property by property. The
+    /// eight `age` entries are distinct `IntegerProperty` instances (2, 3, 4, 5, 6, 8, 16 and 26
+    /// values), so the value count is part of the identity; every other entry is a single
+    /// two-valued property. Orientation properties are not on the list and survive.
+    #[test]
+    fn the_deny_list_is_upstreams_property_instances() {
+        for values in [2, 3, 4, 5, 6, 8, 16, 26] {
+            assert!(
+                denied_property("age", values),
+                "age with {values} values is one of upstream's AGE instances"
+            );
+        }
+        assert!(
+            !denied_property("age", 7),
+            "a seven-valued age is not a property upstream lists, so it survives"
+        );
+        for name in [
+            "half",
+            "waterlogged",
+            "lit",
+            "has_record",
+            "has_book",
+            "open",
+            "stage",
+        ] {
+            assert!(denied_property(name, 2), "{name} is a denied boolean/stage");
+            assert!(
+                !denied_property(name, 3),
+                "a three-valued {name} is a different property instance"
+            );
+        }
+        for name in [
+            "facing", "axis", "hinge", "powered", "rotation", "shape", "type", "snowy", "distance",
+            "north",
+        ] {
+            assert!(
+                !denied_property(name, 2) && !denied_property(name, 4),
+                "{name} is kept"
+            );
+        }
+    }
+
+    /// The case the gap line names: a door's `half` and `open` are transient and fall back to
+    /// the default state, while `facing` (orientation), `hinge` (which side it swings on) and
+    /// `powered` (its signal) are carried over — exactly `cleanBlockState`'s split.
+    #[test]
+    fn cleaning_a_door_drops_half_and_open_and_keeps_facing_and_hinge() {
+        let source =
+            "minecraft:oak_door[facing=east,half=upper,hinge=right,open=true,powered=true]";
+        let default =
+            "minecraft:oak_door[facing=north,half=lower,hinge=left,open=false,powered=false]";
+        let definition = [
+            facts("facing", 4),
+            facts("half", 2),
+            facts("hinge", 2),
+            facts("open", 2),
+            facts("powered", 2),
+        ];
+        assert_eq!(
+            clean_block_state(source, default, &definition).as_deref(),
+            Some("minecraft:oak_door[facing=east,half=lower,hinge=right,open=false,powered=true]"),
+            "half=upper and open=true are dropped; facing, hinge and powered survive"
+        );
+    }
+
+    /// A crop's `age` is `AGE_7` (eight values), so it is cleaned to the block's default; the
+    /// control is the same rule on a seven-valued `age`, which upstream does not list and the
+    /// port therefore keeps — the value count is what tells them apart.
+    #[test]
+    fn cleaning_a_crop_resets_its_age_and_keeps_a_mods_own() {
+        assert_eq!(
+            clean_block_state(
+                "minecraft:wheat[age=7]",
+                "minecraft:wheat[age=0]",
+                &[facts("age", 8)]
+            )
+            .as_deref(),
+            Some("minecraft:wheat[age=0]"),
+            "a crop's age is transient"
+        );
+        assert_eq!(
+            clean_block_state(
+                "mymod:plant[age=6,waterlogged=true]",
+                "mymod:plant[age=0,waterlogged=false]",
+                &[facts("age", 7), facts("waterlogged", 2)],
+            )
+            .as_deref(),
+            Some("mymod:plant[age=6,waterlogged=false]"),
+            "a mod's seven-valued age occupies no upstream instance and survives"
+        );
+    }
+
+    /// Orientation and shape survive together with the block's own properties, and a state with
+    /// no properties is returned as its block id.
+    #[test]
+    fn cleaning_keeps_orientation_and_shape() {
+        let source = "minecraft:oak_stairs[facing=east,half=top,shape=outer_left,waterlogged=true]";
+        let default =
+            "minecraft:oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]";
+        let definition = [
+            facts("facing", 4),
+            facts("half", 2),
+            facts("shape", 5),
+            facts("waterlogged", 2),
+        ];
+        assert_eq!(
+            clean_block_state(source, default, &definition).as_deref(),
+            Some(
+                "minecraft:oak_stairs[facing=east,half=bottom,shape=outer_left,waterlogged=false]"
+            )
+        );
+        assert_eq!(
+            clean_block_state("minecraft:stone", "minecraft:stone", &[]).as_deref(),
+            Some("minecraft:stone")
+        );
+    }
+
+    /// Text the game did not write, or a source/default pair of different blocks, is refused
+    /// rather than half-cleaned; an empty definition (no metadata) carries every property over,
+    /// so a missing table can never silently erase the orientation.
+    #[test]
+    fn cleaning_refuses_malformed_text_and_keeps_everything_without_metadata() {
+        assert_eq!(clean_block_state("garbage", "minecraft:stone", &[]), None);
+        assert_eq!(
+            clean_block_state("minecraft:stone[", "minecraft:stone", &[]),
+            None
+        );
+        assert_eq!(
+            clean_block_state("minecraft:dirt", "minecraft:stone", &[]),
+            None,
+            "a default state of another block cannot be cleaned into"
+        );
+        assert_eq!(
+            clean_block_state(
+                "minecraft:oak_door[facing=east,half=upper,hinge=left,open=true,powered=false]",
+                "minecraft:oak_door[facing=north,half=lower,hinge=left,open=false,powered=false]",
+                &[],
+            )
+            .as_deref(),
+            Some("minecraft:oak_door[facing=east,half=upper,hinge=left,open=true,powered=false]")
+        );
+    }
+
+    /// The status readout names the stored state string, so the cleaning is observable in game
+    /// (a block with no properties still reads as its id alone).
+    #[test]
+    fn the_status_reply_names_the_stored_state_string() {
+        let door = "minecraft:oak_door[facing=east,half=lower,hinge=right,open=false,powered=true]";
+        assert_eq!(
+            status_reply(Mode::Grid, 5, Some(door), false),
+            format!(
+                "Building Gadget: mode grid, range 5, block {door}, place-on-top off, \
+                 placement held (blocked: no-cancellable-placement)"
+            )
+        );
     }
 }

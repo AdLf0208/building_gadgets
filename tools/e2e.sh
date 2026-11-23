@@ -33,6 +33,12 @@
 #     a read that always answers `false` reports 8 in the tagged run, one that always answers
 #     `true` reports 0 in the control run (and in every mode phase).
 #
+# Two clean-state phases close the selection family (upstream's `GadgetUtils.cleanBlockState`):
+#
+#   * `clean_selection` — a lit furnace's transient `lit=true` is stored at the block's default
+#     (`lit=false`) while `facing=west` survives; the status reply names the stored state string;
+#   * `clean_transient` — a ripe `minecraft:wheat[age=7]` is stored as `age=0`.
+#
 #   GAME=<launcher-built horizon-client> tools/e2e.sh
 #   GAME=$CONTROL_GAME tools/e2e.sh          # same Nightly, no package: the gadget
 #                                            # id is unknown -> FAIL, EXIT:1
@@ -60,7 +66,7 @@ SOCK=${SOCK:-$TMP/buildinggadgets2-modes.sock}
 SELFTEST=${SELFTEST:-0}
 WORLD=${WORLD:-BuildingGadgets2Modes}
 TOOL=buildinggadgets2:gadget_building
-PHASES=14
+PHASES=16
 HELD="Building Gadget: held (blocked: no-cancellable-placement)"
 # A carried `buildinggadgets2:deny` member whose other selection clauses all pass, so only the
 # tag can refuse it: destroy speed 1.5 (> 0), no fluid, block item air.
@@ -183,6 +189,25 @@ select_at() { # x y z face
 block_at() { # x y z
     ctl blocks "$1" "$2" "$3" "$1" "$2" "$3" \
         | jq -r '(.blocks[0][3] // "minecraft:air") | split("[")[0]'
+}
+
+# The full state string at a cell (`minecraft:oak_door[facing=west,half=upper,…]`), as the engine
+# serializes it: a phase asserts the state it is about to click, not one it hopes is there.
+state_at() { # x y z
+    ctl blocks "$1" "$2" "$3" "$1" "$2" "$3" | jq -r '.blocks[0][3] // "?"'
+}
+
+# One property's value out of a state string, without depending on the engine's property order.
+state_property() { # state name
+    local list=${1#*[} pair
+    list=${list%]}
+    local IFS=,
+    for pair in $list; do
+        case "$pair" in
+            "$2="*) echo "${pair#*=}"; return 0 ;;
+        esac
+    done
+    echo "?"
 }
 
 command_reply() { # the action bar the command just printed
@@ -419,23 +444,129 @@ deny_destination_phase() {
     assert_held "$name" "$want" "$actual" "$spent" "$reply"
 }
 
-# A world data pack that re-declares `buildinggadgets2:deny` with a replaceable block, so the
-# destination rule decides the two snow cells. `/reload` rebuilds the world's tables from its
-# packs (`Game::reload_world_tables`), which is what a `TagsUpdatedEvent` does upstream.
+# A world data pack that re-declares `buildinggadgets2:deny` with `minecraft:snow`, so the destination
+# rule is the only thing that can decide the two snow cells. A pack *adds* to a tag (the world's files
+# and the mod's are a union — the 0.2.6 probe measured that an empty `{"values":[]}` leaves the
+# carried members in place), which is why this leg extends the tag rather than replacing it.
+# `/reload` rebuilds the world's tables from its packs (`Game::reload_world_tables`), which is what
+# a `TagsUpdatedEvent` does upstream.
 install_deny_extension() {
     local pack=$GAME_DIR/saves/$WORLD/datapacks/denyextension
     mkdir -p "$pack/data/buildinggadgets2/tags/block"
     cat > "$pack/pack.mcmeta" <<'JSON'
 {"pack":{"pack_format":121,"description":"buildinggadgets2 e2e: the deny tag with a replaceable member"}}
 JSON
-    cat > "$pack/data/buildinggadgets2/tags/block/deny.json" <<'JSON'
-{"values":["minecraft:snow"]}
+    cat > "$pack/data/buildinggadgets2/tags/block/deny.json" <<JSON
+{"values":["$DENYABLE_BLOCK"]}
 JSON
     echo "== the test world declares $DENYABLE_BLOCK in the deny tag, then /reload =="
     echo "  data pack: $pack"
-    ls -1 "$pack/data/buildinggadgets2/tags/block/" >&2
     ctl command "reload" >/dev/null
     ctl wait 6
+}
+
+# The selection's `GadgetUtils.cleanBlockState`: a sneak click stores the block's default state with
+# only the properties upstream's `DENY_PROPERTIES` does not name. A lit furnace carries both kinds —
+# `lit` is denied, `facing` is kept — so one click proves both sides of the split. The clicked state
+# is read and asserted first, so the expectation cannot hold vacuously.
+#
+# The gap line's door example cannot be selected at all since 0.2.5: the carried
+# `buildinggadgets2:deny` tag names `#minecraft:doors`, and a world data pack can only *add* to a
+# tag (a pack that re-declares the tag as `{"values":[]}` left the doors refused, measured in the
+# probe run). The door's own `half`/`open`/`hinge`/`powered` cleaning is pinned by the unit test
+# `cleaning_a_door_drops_half_and_open_and_keeps_facing_and_hinge`; the game assertion uses a block
+# the tag lets through.
+clean_selection_phase() {
+    local name=clean_selection reply at want
+    local tail='place-on-top off, placement held (blocked: no-cancellable-placement)'
+    local raw clean
+
+    echo "== clean phase $name: a lit furnace's lit=true is dropped, facing=west survives =="
+    PHASE_REJECTED=0
+    reset_stage
+    ctl select "$TOOL" >/dev/null
+    reply=$(set_mode grid)
+    [ "$reply" = "Building Gadget mode set to grid" ] \
+        || phase_fail "$name: the mode reply was '$reply'"
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+    reply=$(set_place_on_top off)
+    [ "$reply" = "Building Gadget place-on-top off" ] \
+        || phase_fail "$name: the place-on-top reply was '$reply'"
+
+    # A full cube (the crosshair target is unambiguous) with one denied and one kept property, both
+    # off their defaults, and no tick or neighbour rule that would rewrite `lit` before the click.
+    ctl setblock 2 151 4 'minecraft:furnace[facing=west,lit=true]' >/dev/null
+    ctl wait 3
+    at=$(state_at 2 151 4)
+    echo "  furnace at 2 151 4: $at"
+    [ "$(state_property "$at" lit)" = true ] \
+        || phase_fail "$name: the furnace is '$at', expected lit=true (an unlit furnace proves nothing)"
+    [ "$(state_property "$at" facing)" = west ] \
+        || phase_fail "$name: the furnace is '$at', expected facing=west"
+
+    select_at 2 151 4 west
+    reply=$(actionbar)
+    echo "  selection reply: $reply"
+    [ "$reply" = "Selected minecraft:furnace" ] \
+        || phase_fail "$name: selecting the furnace answered '$reply'"
+    reply=$(command_reply "/buildinggadgets2")
+    echo "  status: $reply"
+
+    # 0.2.5 stored the clicked state as it was read (the differential); upstream's cleanBlockState
+    # stores `lit` at the block's default and carries `facing` over.
+    raw="Building Gadget: mode grid, range 5, block $at, $tail"
+    clean="Building Gadget: mode grid, range 5, block minecraft:furnace[facing=west,lit=false], $tail"
+    want=$clean
+    if [ "$SELFTEST" = 1 ]; then want=$raw; fi
+    [ "$reply" = "$want" ] \
+        || phase_fail "$name: the status reply was '$reply', expected '$want'"
+}
+
+# A crop's `age` is one of the eight denied `IntegerProperty` instances (`AGE_7`, eight values), so
+# the stored state is the block's default. The raw state is the 0.2.5 differential.
+clean_transient_phase() {
+    local name=clean_transient reply at want
+    local tail='place-on-top off, placement held (blocked: no-cancellable-placement)'
+    local raw clean
+
+    echo "== clean phase $name: a ripe wheat's age=7 is transient, the default age=0 is stored =="
+    PHASE_REJECTED=0
+    reset_stage
+    ctl select "$TOOL" >/dev/null
+    reply=$(set_mode grid)
+    [ "$reply" = "Building Gadget mode set to grid" ] \
+        || phase_fail "$name: the mode reply was '$reply'"
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+    reply=$(set_place_on_top off)
+    [ "$reply" = "Building Gadget place-on-top off" ] \
+        || phase_fail "$name: the place-on-top reply was '$reply'"
+
+    ctl setblock 2 150 4 minecraft:farmland >/dev/null
+    ctl setblock 2 151 4 'minecraft:wheat[age=7]' >/dev/null
+    ctl wait 3
+    at=$(state_at 2 151 4)
+    echo "  wheat at 2 151 4: $at"
+    [ "$(state_property "$at" age)" = 7 ] \
+        || phase_fail "$name: the wheat is '$at', expected age=7 (a plant that never ripened proves nothing)"
+
+    select_at 2 151 4 west
+    reply=$(actionbar)
+    echo "  selection reply: $reply"
+    [ "$reply" = "Selected minecraft:wheat" ] \
+        || phase_fail "$name: selecting the wheat answered '$reply'"
+    reply=$(command_reply "/buildinggadgets2")
+    echo "  status: $reply"
+
+    raw="Building Gadget: mode grid, range 5, block $at, $tail"
+    clean="Building Gadget: mode grid, range 5, block minecraft:wheat[age=0], $tail"
+    want=$clean
+    if [ "$SELFTEST" = 1 ]; then want=$raw; fi
+    [ "$reply" = "$want" ] \
+        || phase_fail "$name: the status reply was '$reply', expected '$want'"
 }
 
 
@@ -511,6 +642,10 @@ deny_destination_phase deny_destination_control 8
 install_deny_extension
 deny_destination_phase deny_destination 6
 
+# The selection's cleaned state, on blocks the carried deny tag lets through.
+clean_selection_phase
+clean_transient_phase
+
 
 if [ "$SELFTEST" = 1 ]; then
     [ "$REJECTED_PHASES" -ge "$PHASES" ] \
@@ -519,4 +654,4 @@ if [ "$SELFTEST" = 1 ]; then
     exit 1
 fi
 
-echo "PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; and the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag"
+echo "PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag; and the selection stored upstream's cleaned state: a lit furnace kept facing=west and dropped lit=true, and a ripe wheat was stored as age=0 (the status reply named both)"

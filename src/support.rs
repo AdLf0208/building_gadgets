@@ -38,7 +38,8 @@ const MAIN_INVENTORY_END: u32 = 36;
 pub struct GadgetState {
     /// The tool range, 1 to [`MAX_RANGE`].
     pub range: u32,
-    /// The block state a sneak click selected.
+    /// The block state a sneak click selected, as upstream stores it: the clicked block's state
+    /// with its transient properties at the block's default (`cleanBlockState`).
     pub selected: Option<String>,
     /// The active mode, upstream's `GADGET_MODE` component.
     pub mode: Mode,
@@ -183,14 +184,45 @@ fn selectable(host: &dyn ServerHost, level: LevelRef, pos: [i32; 3], state: Bloc
     )
 }
 
-/// The block's name for a status reply: the state string resolved back to its block,
-/// so a reply reads `minecraft:oak_stairs`, not its properties.
+/// The block's name for the selection reply: the state string resolved back to its block, so the
+/// line reads `Selected minecraft:oak_stairs` rather than its properties. The status reply prints
+/// the stored state string itself.
 fn selected_name(host: &dyn ServerHost, text: &str) -> Option<String> {
     let state = host.block_state_id(text)?;
     host.block_states()
         .name(state.block())
         .ok()
         .map(str::to_owned)
+}
+
+/// The state a sneak click stores: upstream's `GadgetUtils.setBlockState` →
+/// [`runtime::clean_block_state`], through the game's own metadata — the block's default state
+/// (`Block.defaultBlockState`), its property list with the value counts that tell upstream's
+/// `age` instances apart, and the game's canonical serialization of the result.
+///
+/// A fact the host cannot answer falls back to the raw state, so a missing table stores what
+/// 0.2.5 stored instead of refusing the selection.
+fn stored_state(host: &dyn ServerHost, clicked: BlockState) -> Option<String> {
+    let facts = host.block_states();
+    let source = host.block_state_string(clicked)?;
+    let cleaned = host
+        .block_state_default(clicked.block())
+        .and_then(|state| host.block_state_string(state))
+        .and_then(|default| {
+            let definition = facts
+                .definition(clicked.block())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|property| runtime::PropertyFacts {
+                    name: property.name,
+                    values: property.values.len(),
+                })
+                .collect::<Vec<_>>();
+            runtime::clean_block_state(&source, &default, &definition)
+        })
+        .and_then(|text| host.block_state_id(&text))
+        .and_then(|state| host.block_state_string(state));
+    Some(cleaned.unwrap_or(source))
 }
 
 /// How many items of `item` the main inventory holds. Unlike the 0.1.0 port's
@@ -425,7 +457,7 @@ fn use_on_block(
             let _ = player.action_bar(host, Text::literal(INVALID_BLOCK));
             return None;
         }
-        let text = host.block_state_string(clicked)?;
+        let text = stored_state(host, clicked)?;
         let name = selected_name(host, &text).unwrap_or_else(|| text.clone());
         let selected = GadgetState {
             range: state.range,
@@ -581,14 +613,12 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
             let state = player
                 .and_then(|player| held_gadget(host, player))
                 .map_or_else(GadgetState::default, |(_, stack)| read_state(&stack));
-            let selected = state
-                .selected
-                .as_deref()
-                .and_then(|text| selected_name(host, text));
+            // The readout is the state string the component holds, so the cleaned selection
+            // (`cleanBlockState`: transient properties at the block's default) is observable.
             let line = runtime::status_reply(
                 state.mode,
                 state.range,
-                selected.as_deref(),
+                state.selected.as_deref(),
                 state.place_on_top,
             );
             reply(host, player, line);

@@ -126,6 +126,9 @@ based on the direction they are looking … useful for building bridges."
 - **The raw clicked state id is stored**, not a `cleanBlockState` copy: the pin
   exports states but not a per-property copy helper, so transient properties
   (age/lit/waterlogged) are not stripped (recorded gap).
+  **Closed in 0.2.6** — the pin *does* stamp `BlockStates::definition` (each property with its legal
+  values) and `block_state_default` (`Block.defaultBlockState`), which the 0.1.0 reading missed; see
+  `notes.md` → `## Slice 5`.
 - **Placement is immediate** with `Game::native_set_block`; there is no render
   block, animation or per-tick queue, and no retry pass for torches placed
   before their support. `native_set_block` does not fire `BlockItem.place` or

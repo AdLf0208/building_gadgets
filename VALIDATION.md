@@ -1,15 +1,36 @@
 # Validation
 
 > **Historical (0.1.0, the retired `.hnmod` format).** The current package is the
-> SDK `.hmod` (**0.2.5**): its ladder, artifact and evidence are in
-> [`notes.md`](notes.md) → `## Slice 4 — the buildinggadgets2:deny tag`, with the logs under
+> SDK `.hmod` (**0.2.6**): its ladder, artifact and evidence are in
+> [`notes.md`](notes.md) → `## Slice 5 — cleanBlockState on the selection`, with the logs under
 > `../_shared/evidence/buildinggadgets2/sdk-*.log` and the in-game legs under
 > `../_shared/evidence/buildinggadgets2-e2e/`.
-> **0.2.5 still holds the block writes** (`blocked: no-cancellable-placement`); the
-> in-game proof is the held click, the two world-border edge phases and the three
-> deny-tag phases, not a placed row. The staged `horizon.py` steps below no longer exist.
+> **0.2.6 still holds the block writes** (`blocked: no-cancellable-placement`); the
+> in-game proof is the held click, the two world-border edge phases, the three
+> deny-tag phases and the two cleaned-selection phases, not a placed row. The staged
+> `horizon.py` steps below no longer exist.
 
-## 0.2.5 (the current package)
+## 0.2.6 (the current package)
+
+| Check | Result |
+|---|---|
+| `cargo test` | 47 passed, 0 failed (red first: 42 passed / 5 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice (`rm -f Cargo.lock` each) | 48,042 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | exit 0 / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` | 1/1 (`package matches the tree`) |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok` |
+| `tools/e2e.sh` (modded, 16 phases) | `PASS` + `EXIT:0` |
+| `tools/e2e.sh` with `GAME=$CONTROL_GAME` | `FAIL` + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 16 phases rejected (32 assertions) + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 10/10 |
+
+Artifact: `buildinggadgets2.hmod` 48,042 B, sha256
+`6885766f687e20941f3538a5576bfdf3a31ee5e97bcc41f18c15c23b08d0c857`, 19 entries, no packed
+`Cargo.lock`; declared version 0.2.6. The game leg was rebuilt from the final tree after the docs
+were written (`Compiling buildinggadgets2 (1 of 1)`).
+
+## 0.2.5 (previous)
 
 | Check | Result |
 |---|---|
