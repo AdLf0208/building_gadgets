@@ -1677,3 +1677,202 @@ green pair; neither is a Java-mod defect.
 > two ordinary stones there, 0 removed in both. The build stays held
 > (`blocked: no-cancellable-placement`) and the preview stays
 > `blocked(no-client-held-stack-components)`.
+
+## Slice 7 — the exchange gadget's destination plan (2026-11-24, version 0.2.8)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Coverage — every family in the jar (0.2.7)`:
+*"`paste/rotate/cut/exchange gadgets, anchor, GUI, wheel screen` | not ported — later slices"*.
+The brief names the exchange gadget as the remaining consumer of `buildinggadgets2:deny`
+from the same line. Class content, tier deep; the same hold as 0.2.7 lets it land as a
+**plan + readout only**: a new item, a `gadget_state` field and a pure plan, with no
+`BuildingUtils.exchange` call, no `removeTickHandler`, no renderer and no entity system.
+The destruction gadget's planner, replies and three measured queries are reused.
+
+### The plan rules as read from the jar and the same `1.21.1` clone (`11cd2efb…`)
+
+- `common/items/GadgetExchanger.java:72-85`: `onAction` collects with `mode.collect(...)`
+  and hands the cells to `BuildingUtils.exchange` — the write this slice withholds.
+  `:91-101`: `onShiftAction` answers *Invalid Block* for a failed `isValidBlockState`.
+- `util/modes/BaseMode.java:105-125` `isExchangingValid`: air is refused, then
+  `GadgetUtils.isValidBlockState`, then the block-entity/fuzzy/compare clauses (settings
+  and a render-block class check, out of this slice). `isPosValid` adds height,
+  `canSurvive` and `mayInteract` (the held path's gate).
+- `util/BuildingUtils.java:467-513` `exchange`: per destination `mayInteract`, a
+  `BreakEvent`, the already-matching check and `isValidBlockState` decide; payment,
+  energy and the queued write are the hold.
+- `util/GadgetUtils.java:49-53` `isValidBlockState`: `!BG2DENY && getDestroySpeed >= 0 &&
+  (fluid empty || source)`.
+
+**The id comes from the artefact, not the brief's class name.** The jar's item, recipe
+result and lang id are `buildinggadgets2:gadget_exchanging`; `GadgetExchanger` is the
+Java *class*. The plan therefore declares that id, and the report records the
+discrepancy. Its recipe is the jar's `iri / dld / ili` with `c:ingots/iron`,
+`c:dusts/redstone`, `c:gems/diamond` and `c:gems/lapis` resolved to concrete items as
+for the other two recipes; the jar's model, advancement and 16×16 texture are carried
+byte-for-byte (texture sha256 `6cdf489e52adc95c06c8983f019f0726ad07ca1ec8e3a61356006ed77187a28f`).
+
+| Rule | Pin query | Verdict |
+|---|---|---|
+| air | `BlockMetadata::name(state.block())` -> `minecraft:{air,cave_air,void_air}` | **carried** |
+| `destroy_speed < 0` | `BlockStates::destroy_speed` (stamped, bedrock −1 in 26.3) | **carried** |
+| deny-tag member | `Host::block_in_tag(block, "buildinggadgets2:deny")` (merged tag) | **carried** |
+| `RenderBlock` (fuzzy clause) | no stamped block-class surface at `0a875da` | **`blocked(no-render-block-surface)`** — unchanged from 0.2.7, not invented |
+
+The three queryable clauses are exactly the destruction planner's predicate, so
+`layer_plan` is now shared by both planners (the verified ±range layer maths was not
+re-derived). The fluid, block-entity, fuzzy/compare and `RenderBlock` clauses are
+recorded, not faked.
+
+### What shipped
+
+1. **`runtime`:** `EXCHANGE_GADGET = "buildinggadgets2:gadget_exchanging"`, a shared
+   `layer_plan`, `exchange_plan`, `exchange_reply` and `exchange_status_reply`. Both
+   replies keep the hold explicit: `0 placed, 0 removed (blocked: no-cancellable-placement)`.
+2. **`support`:** `GadgetState.exchange_plan` travels in the same component under the
+   `exchange_plan` key; an item-scoped `ExchangeGadget` Part plans on a sneak click and
+   writes nothing on a plain click; `/buildinggadgets2` names that stack's plan count;
+   the range command and wheel accept the exchange gadget alongside the other two.
+3. **Content:** `gadget_exchanging` item definition, the jar's model/texture, the
+   concrete-id recipe, its advancement, lang name and creative-tab entry.
+
+### Red → green (verbatim)
+
+Six new tests were run first against stubs (`exchange_plan -> Vec::new()`, both replies
+`""`) from `ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.8-exchange.log`
+(`EXIT:101`), **54 passed, 5 failed** (the id test is data and passed):
+
+```
+---- runtime::tests::exchange_plan_excludes_the_tag_member_and_the_unbreakable_block stdout ----
+thread 'runtime::tests::exchange_plan_excludes_the_tag_member_and_the_unbreakable_block' (117277) panicked at src/runtime.rs:2067:9:
+assertion `left == right` failed: the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept
+  left: []
+ right: [[-2, 150, 0], [-1, 150, 0], [0, 150, 0]]
+```
+
+Green: **59 passed, 0 failed** (`sdk-test.log`). The new tests are
+`the_exchange_gadget_id_is_the_jars_item_id`,
+`exchange_plan_excludes_the_tag_member_and_the_unbreakable_block`,
+`exchange_plan_with_ordinary_stones_includes_both`, `exchange_plan_skips_air`,
+`exchange_reply_names_the_planned_count_and_the_hold` and
+`exchange_status_reply_names_the_range_and_the_plan`.
+
+### In game (fail-capable, on the delivered bytes)
+
+Two phases in `tools/e2e.sh`, the same rig as the destruction pair: the whole y=150
+layer is cleared first, a stone sits at (0,150,0) and the two cells (1,150,0)/(2,150,0)
+are read back before the click. Quoted from
+`ports/_shared/evidence/buildinggadgets2-e2e/e2e-exchange.log`:
+
+```
+== exchange phase exchange_refusals: two cells beside the clicked stone, 1 planned ==
+  cells (1,150,0) and (2,150,0): minecraft:piston_head, minecraft:bedrock
+  plan reply: Exchanging Gadget: planned 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Exchanging Gadget: range 5, planned 1 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+== exchange phase exchange_control: two cells beside the clicked stone, 3 planned ==
+  cells (1,150,0) and (2,150,0): minecraft:stone, minecraft:stone
+  plan reply: Exchanging Gadget: planned 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Exchanging Gadget: range 5, planned 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+PASS: all three carried recipes crafted one gadget each with their ingredients consumed (a missing lapis matched nothing in each); … the exchange gadget's action bar and parsed status named the same 1-with-refusals / 3-with-stones pair with 0 placed and 0 removed
+EXIT:0
+```
+
+The pair is the proof: a read that always refuses the tag/speed reports 3 in the first
+rig, one that always accepts them reports 1 in the control rig. `SELFTEST=1` swaps both
+expectations (1→3 and 3→1) and **all 20 phases reject** (`36 assertions`, `FAIL` +
+`EXIT:1`, `e2e-exchange-selftest.log`). The control game without the package refuses
+`buildinggadgets2:gadget_exchanging` as an unknown id (`EXIT:1`). The carried exchange
+recipe is crafted with all ingredients consumed (iron×4, redstone×1, diamond×2,
+lapis×2) and a lapis-free control matches nothing. All 13 earlier e2e legs stay green.
+
+### Coverage — every family in the jar (0.2.8)
+
+Replaces the 0.2.7 table; unchanged rows keep their verdicts.
+
+| Family | Status |
+|---|---|
+| the eight building modes, place-on-top, borders, per-cell gate | tested — phases as in 0.2.7, 0 written, 0 spent |
+| `cleanBlockState` — denied/kept properties, `age` instances | tested — `clean_selection`, `clean_transient` and the six unit tests |
+| `buildinggadgets2:deny` — selection and build destination | tested — `deny_selection`, `deny_destination_control` (8), `deny_destination` (6) |
+| the building gadget's status readout | tested — names the cleaned state string |
+| carried building recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried destruction recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| destruction destination — air / speed / deny tag / `RenderBlock` | tested (three queries) / `blocked(no-render-block-surface)` |
+| destruction plan readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| **carried exchange recipe** | tested — crafted with iron×4/redstone×1/diamond×2/lapis×2 consumed, missing-lapis control empty |
+| **exchange destination — air** | unit tested — `exchange_plan_skips_air` |
+| **exchange destination — `destroy_speed < 0`** | tested — phase `exchange_refusals` (`minecraft:bedrock` excluded) |
+| **exchange destination — deny tag** | tested — phase `exchange_refusals` (`minecraft:piston_head` excluded), control includes two stones |
+| **exchange destination — `RenderBlock` / fluid / block entity / fuzzy** | `blocked(no-render-block-surface)` for the block-class line; settings-gated Java clauses not ported in this plan-only slice |
+| **exchange plan readout + gadget id** | tested — parsed action bar and status counts in both rigs; `SELFTEST` inverts both; id resolved packaged, refused in control |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| block removal/swap, undo, energy and the mode/range screens | not ported — plan-only slices; `removeTickHandler`/`exchange` are not called |
+| paste/rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices |
+| preview | `blocked(no-client-held-stack-components)` — unchanged |
+
+### Gaps (0.2.8)
+
+The 0.2.7 list holds with one closure: the exchange destination plan is carried (with
+its `RenderBlock` line `blocked(no-render-block-surface)`); the actual swap, undo list,
+energy and range screen are not. The build stays held
+(`blocked: no-cancellable-placement`), the preview stays
+`blocked(no-client-held-stack-components)`, and the other gadgets are unchanged.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+### Verification (0.2.8)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **59 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.8-exchange.log`, 54/5, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 (`sdk-clippy.log`, `sdk-fmt.log`) |
+| `cargo horizon-mod build` twice from the final tree, `rm -f Cargo.lock` before each | **64,190 B**, `cmp` identical (`sdk-build2.log`, `sdk-build3.log`; the earlier `sdk-build.log` predates the packed README edit) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.8 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` / `fits --build 0b14f8a…` | `made for` / `fits` (`sdk-fits.log`, `sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1, `package matches the tree`, R9 green |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` after removing the stale `native-*` tag and export (`launcher-build-0.2.8.log`) |
+| e2e (modded, 20 phases) | `PASS` + `EXIT:0` (`e2e-exchange.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the destruction gadget id … is unknown` + `EXIT:1` (`e2e-exchange-control.log`) |
+| e2e (`SELFTEST=1`) | all 20 phases rejected the inverted expectations (36 assertions), `FAIL` + `EXIT:1` (`e2e-exchange-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | **16/16** — the 13 earlier legs stay green |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **64,190 B**, sha256
+`bcbc948a8a4c74628757dc96f67e8fce4118ba7ae7e448f7c13dca21ccdbd69e`, **31 entries** (the
+six new exchange files included), no packed `Cargo.lock`; declared version **0.2.8**;
+`src/runtime.rs` sha256 `87ddc7dcbf05…` in the tree and in the archive. The game leg
+was rebuilt from this tree after the docs were written (`Compiling buildinggadgets2
+(1 of 1)`), so the bytes under test are the bytes delivered.
+
+### Changelog (0.2.8)
+
+> **Building Gadgets 2 0.2.8** — the exchange gadget is carried under the jar's item
+> id `buildinggadgets2:gadget_exchanging`: its item, recipe, the jar's model/texture and
+> a sneak-click destination plan on the same one-layer rule as the destruction gadget.
+> The plan refuses air, an unbreakable block (`destroy_speed < 0`) and a
+> `buildinggadgets2:deny` member with the three stamped queries; upstream's
+> `RenderBlock` clause is `blocked(no-render-block-surface)` and the fluid/block-entity/
+> fuzzy clauses need settings this pin does not stamp. The plan is stored on the stack and
+> `/buildinggadgets2` names its count with 0 placed and 0 removed. The parsed in-game pair
+> is 1 planned cell with a deny-tag piston head and a bedrock beside the click and 3 with
+> two ordinary stones there; nothing is swapped. The build stays held
+> (`blocked: no-cancellable-placement`) and the preview stays
+> `blocked(no-client-held-stack-components)`.
+
+## Next slice
+
+**Family:** the coarse `paste/rotate/cut gadgets` line, which is the last item of the
+coverage row this slice edited and the only remaining tool family in the jar that does
+not need a render or entity surface. The exact gap line is
+*`paste/rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices`*
+(`### Coverage — every family in the jar (0.2.8)`). **Tier fit:** `deep`/content — the
+paste gadget's `Copy`-mode destination collection is the same pure layer/plan shape as
+0.2.7/0.2.8, so a plan + readout fits without the held write, a renderer or the
+block-entity data copy that the real paste needs. **In-game assertion:** hold
+`buildinggadgets2:gadget_paste`, sneak-click the stone at (0,150,0) with a
+`minecraft:piston_head` and a `minecraft:bedrock` at (1,150,0)/(2,150,0); `ctl chat
+"/buildinggadgets2"` then `ctl messages 4 | jq -r '.actionbar'` must parse to a count of
+1 (both refused) and 3 with two ordinary stones there, both with 0 placed/0 removed,
+and `SELFTEST=1` must invert both counts.

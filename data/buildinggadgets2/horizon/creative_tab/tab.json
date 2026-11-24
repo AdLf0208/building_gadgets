@@ -3,6 +3,7 @@
   "icon": "buildinggadgets2:gadget_building",
   "items": [
     "buildinggadgets2:gadget_building",
-    "buildinggadgets2:gadget_destruction"
+    "buildinggadgets2:gadget_destruction",
+    "buildinggadgets2:gadget_exchanging"
   ]
 }

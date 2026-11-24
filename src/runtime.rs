@@ -189,6 +189,18 @@ pub fn destroyable(facts: DestroyFacts) -> bool {
 /// This is a **plan only** — the cell list is stored on the stack, nothing is removed.
 #[must_use]
 pub fn destroy_plan(world: &mut impl DestroyWorld, clicked: [i32; 3], range: u32) -> Vec<[i32; 3]> {
+    layer_plan(world, clicked, range, destroyable)
+}
+
+/// The one horizontal layer both destination planners share: `range` blocks out on
+/// both horizontal axes around the clicked block, keeping the cells whose facts the
+/// caller's predicate accepts. An unloaded or empty cell is skipped, not stopped at.
+fn layer_plan(
+    world: &mut impl DestroyWorld,
+    clicked: [i32; 3],
+    range: u32,
+    keep: fn(DestroyFacts) -> bool,
+) -> Vec<[i32; 3]> {
     if range == 0 {
         return Vec::new();
     }
@@ -197,7 +209,7 @@ pub fn destroy_plan(world: &mut impl DestroyWorld, clicked: [i32; 3], range: u32
     for x in (clicked[0] - reach)..=(clicked[0] + reach) {
         for z in (clicked[2] - reach)..=(clicked[2] + reach) {
             let pos = [x, clicked[1], z];
-            if world.facts(pos).is_some_and(destroyable) {
+            if world.facts(pos).is_some_and(keep) {
                 cells.push(pos);
             }
         }
@@ -221,6 +233,49 @@ pub fn destroy_reply(count: usize) -> String {
 pub fn destroy_status_reply(range: u32, planned: Option<usize>) -> String {
     format!(
         "Destruction Gadget: range {range}, planned {} cells, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
+        planned.unwrap_or(0)
+    )
+}
+
+/// The exchange gadget (slice 0.2.8). The 1.3.9 jar names the item
+/// `buildinggadgets2:gadget_exchanging` (`GadgetExchanger` is the Java *class*). Its
+/// destination rule is `BaseMode.isExchangingValid` + `GadgetUtils.isValidBlockState`:
+/// the same three queried clauses as the destruction planner (air, destroy speed and
+/// the deny tag). The write `BuildingUtils.exchange` would make stays held.
+pub const EXCHANGE_GADGET: &str = "buildinggadgets2:gadget_exchanging";
+
+/// The exchange destination plan. `BaseMode.isExchangingValid` (air, `isValidBlockState`)
+/// is the same three queried clauses the destruction planner already carries — air,
+/// `destroy_speed < 0` and the merged deny tag — so the two gadgets share both the
+/// layer maths and the predicate. The remaining Java clauses (block entities, the
+/// fuzzy/compare state and `RenderBlock`) need settings or a block-class query this
+/// pin does not stamp; the plan records the render-block line as
+/// [`NO_RENDER_BLOCK_SURFACE`] instead of inventing it. Nothing is swapped here.
+#[must_use]
+pub fn exchange_plan(
+    world: &mut impl DestroyWorld,
+    clicked: [i32; 3],
+    range: u32,
+) -> Vec<[i32; 3]> {
+    layer_plan(world, clicked, range, destroyable)
+}
+
+/// The action bar line after an exchange plan. The hold is explicit: the plan places
+/// nothing and removes nothing while `placement_hold()` stands.
+#[must_use]
+pub fn exchange_reply(count: usize) -> String {
+    let cells = if count == 1 { "cell" } else { "cells" };
+    format!(
+        "Exchanging Gadget: planned {count} {cells}, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})"
+    )
+}
+
+/// The `/buildinggadgets2` status line while the exchange gadget is held. `None` is a
+/// gadget that has not planned yet, so its honest count is 0.
+#[must_use]
+pub fn exchange_status_reply(range: u32, planned: Option<usize>) -> String {
+    format!(
+        "Exchanging Gadget: range {range}, planned {} cells, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
         planned.unwrap_or(0)
     )
 }
@@ -2015,6 +2070,87 @@ mod tests {
         assert_eq!(
             destroy_status_reply(5, None),
             "Destruction Gadget: range 5, planned 0 cells, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    // --- Slice 0.2.8: the exchange gadget's destination plan -------------------------
+
+    #[test]
+    fn the_exchange_gadget_id_is_the_jars_item_id() {
+        assert_eq!(EXCHANGE_GADGET, "buildinggadgets2:gadget_exchanging");
+    }
+
+    #[test]
+    fn exchange_plan_excludes_the_tag_member_and_the_unbreakable_block() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::tagged());
+        grid.cells.insert([2, 150, 0], CellFacts::bedrock());
+        grid.cells.insert([-1, 150, 0], CellFacts::stone());
+        grid.cells.insert([-2, 150, 0], CellFacts::stone());
+        let cells = exchange_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[-2, 150, 0], [-1, 150, 0], [0, 150, 0]],
+            "the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept"
+        );
+    }
+
+    #[test]
+    fn exchange_plan_with_ordinary_stones_includes_both() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::stone());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = exchange_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [1, 150, 0], [2, 150, 0]],
+            "the same rig with two ordinary stones includes both"
+        );
+    }
+
+    #[test]
+    fn exchange_plan_skips_air() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::air());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = exchange_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [2, 150, 0]],
+            "air is not a destination"
+        );
+    }
+
+    #[test]
+    fn exchange_reply_names_the_planned_count_and_the_hold() {
+        assert_eq!(
+            exchange_reply(3),
+            "Exchanging Gadget: planned 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            exchange_reply(1),
+            "Exchanging Gadget: planned 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    #[test]
+    fn exchange_status_reply_names_the_range_and_the_plan() {
+        assert_eq!(
+            exchange_status_reply(5, Some(3)),
+            "Exchanging Gadget: range 5, planned 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            exchange_status_reply(5, None),
+            "Exchanging Gadget: range 5, planned 0 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
         );
     }
 }

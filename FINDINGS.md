@@ -170,3 +170,43 @@ Source read from the same `1.21.1` clone (`11cd2efb…`) and the 1.3.9 jar:
   `blocked(no-render-block-surface)`; the other three are carried.
 - The plan is stored on the stack and read back by `/buildinggadgets2`; no block
   is removed and no item is refunded (there is no undo list here).
+
+## Slice 7 — the exchange gadget's destination rule (2026-11-24)
+
+Source read from the same `1.21.1` clone (`11cd2efb…`) and the 1.3.9 jar:
+
+- `common/items/GadgetExchanger.java:72-85`: `onAction` needs a non-air selected
+  state, collects with `mode.collect(...)`, then calls `BuildingUtils.exchange`
+  — the write this port holds. `:91-101`: `onShiftAction` refuses a block that
+  fails `GadgetUtils.isValidBlockState` (or a `RenderBlock`) with *Invalid Block*.
+- `util/modes/BaseMode.java:105-125` `isExchangingValid`: the destination must
+  not be air, must pass `isValidBlockState`, and (outside fuzzy mode) must equal
+  the block under the crosshair; a block entity needs the `AFFECT_TILES` toggle.
+  `isPosValid` (`:67-79`) adds the build height, `canSurvive` and `mayInteract`.
+- `util/BuildingUtils.java:467-513` `exchange`: per destination `mayInteract`, a
+  `BreakEvent`, `onBlockPlace`, the already-matching check and `isValidBlockState`
+  decide; payment, energy and `ServerTickHandler.addToMap` are the held write.
+- `util/GadgetUtils.java:49-53` `isValidBlockState`: `!BG2DENY &&
+  getDestroySpeed >= 0 && (fluid empty || source)` — the deny tag's other
+  documented consumer, after the building gadget's selection (0.2.5).
+
+The jar's item id is **`buildinggadgets2:gadget_exchanging`** (`recipe/gadget_exchanging.json`
+result, `assets/.../models/item/gadget_exchanging.json`, `en_us.json`); the brief's
+`gadget_exchanger` names the Java class, not the item. Its recipe is `iri / dld / ili`
+over `c:ingots/iron`, `c:dusts/redstone`, `c:gems/diamond`, `c:gems/lapis`, resolved
+to concrete items as for the building and destruction recipes. Model, advancement
+and 16×16 texture are carried byte-for-byte from the jar
+(texture sha256 `6cdf489e52adc95c06c8983f019f0726ad07ca1ec8e3a61356006ed77187a28f`).
+
+### Where the rewrite differs
+
+- The one `range` stands in for the mode sliders; the plan is a single horizontal
+  layer at the clicked block's height, ±range on x and z (as the destruction plan).
+- The three queried clauses (air, `destroy_speed < 0`, deny tag) are exactly the
+  destruction planner's, so both gadgets share the layer maths and predicate; the
+  non-source-fluid, block-entity, fuzzy/compare and `RenderBlock` clauses need
+  settings or a block-class query this pin does not stamp. The render-block line
+  is `blocked(no-render-block-surface)`, as in 0.2.7.
+- No block is swapped, no item is paid, and `BuildingUtils.exchange` (and its undo
+  list, energy and range screen) is not called: the plan is stored on the stack and
+  read back by `/buildinggadgets2` with `0 placed, 0 removed`.

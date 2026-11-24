@@ -1,6 +1,6 @@
 id = "buildinggadgets2"
 name = "Building Gadgets 2"
-version = "0.2.7"
+version = "0.2.8"
 description = """A port of Building Gadgets 2 for Horizon. The building gadget's item, recipe, selection
 (sneak + right click stores the clicked block's state in the item's buildinggadgets2:gadget_state
 component) and all eight modes (build-to-me, vertical wall, vertical column, surface, horizontal
@@ -15,13 +15,17 @@ gadget is also carried: its item, recipe and a sneak-click destination PLAN (a s
 clicked block's height, +/-range on x and z). The plan refuses air, an unbreakable block
 (destroy speed < 0), a deny-tag member and — where the pin has no stamped block-class query —
 records `blocked(no-render-block-surface)` for upstream's RenderBlock clause only. The plan is
-stored on the stack and /buildinggadgets2 names its cell count; it removes nothing. The build
-itself is HELD: the SDK has no placement call that names the acting player and lets a protection
+stored on the stack and /buildinggadgets2 names its cell count; it removes nothing. The exchange
+gadget is also carried (`gadget_exchanging`, the jar's item id): its item, recipe and a sneak-click
+destination PLAN on the same one-layer rule, refusing air, an unbreakable block and a deny-tag
+member with the three stamped queries. The plan is stored on that stack and named by
+/buildinggadgets2 with 0 placed and 0 removed. The build and the swap itself are HELD:
+the SDK has no placement call that names the acting player and lets a protection
 mod cancel one position, so a click writes no block and spends no item, and says so on the action
 bar with the symbol `blocked: no-cancellable-placement`. Every destination also passes the
 player's own placement gate (build permission, mayUseItemAt, the world border with its exclusive
 upper edges, and a dedicated server's spawn protection). The anchor, undo, energy, the block
-removal the destruction plan precedes, and the paste/rotate/cut/exchange gadgets and their screens
+removal the destruction plan precedes, and the paste/rotate/cut gadgets and their screens
 are not ported yet."""
 authors = ["Direwolf20-MC", "AdLf0208"]
 # Licence of the original (MIT, Direwolf20-MC/BuildingGadgets2); the text and the

@@ -1,6 +1,33 @@
 # Validation
 
-## 0.2.7 (the current package)
+## 0.2.8 (the current package)
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 7 adds the exchange gadget's
+destination plan (a plan + readout only, under the jar's `gadget_exchanging` id); the
+build and the swap stay held (`blocked: no-cancellable-placement`) and `RenderBlock`
+stays `blocked(no-render-block-surface)`. Full narrative, red/green quotes and the
+transcript in [`notes.md`](notes.md) → `## Slice 7`.
+
+| Check | Result |
+|---|---|
+| `cargo test` | 59 passed, 0 failed (red first: 54 passed / 5 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice from the final tree (`rm -f Cargo.lock` each) | 64,190 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | 0.2.8 `native-mod` / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` / `check-recipe-types.py buildinggadgets2` | 1/1 (`package matches the tree`) / `ok` |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` (stale `native-*` tag and export removed first) |
+| `tools/e2e.sh` (20 phases, three recipes) | `PASS` + `EXIT:0` |
+| `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL` (unknown gadget id) + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 20 phases reject the inverted counts (36 assertions) + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 16/16 (the 13 prior legs stay green) |
+
+Artifact: `buildinggadgets2.hmod` 64,190 B, sha256
+`bcbc948a8a4c74628757dc96f67e8fce4118ba7ae7e448f7c13dca21ccdbd69e`, 31 entries, no packed
+`Cargo.lock`; declared version 0.2.8. Details in [`notes.md`](notes.md) → `## Slice 7` →
+`**Package.**`.
+
+## 0.2.7 (previous)
 
 Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 6 adds the destruction gadget's

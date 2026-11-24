@@ -16,8 +16,8 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    self, DEFAULT_RANGE, DESTROY_GADGET, DestroyFacts, DestroyWorld, GadgetCommand, MAX_RANGE,
-    Mode, PlayerView,
+    self, DEFAULT_RANGE, DESTROY_GADGET, DestroyFacts, DestroyWorld, EXCHANGE_GADGET,
+    GadgetCommand, MAX_RANGE, Mode, PlayerView,
 };
 
 /// The persisted state component, upstream's `GadgetNBT` payload on the stack.
@@ -51,6 +51,9 @@ pub struct GadgetState {
     /// Slice 0.2.7: the cells the destruction gadget's last sneak click planned. The plan
     /// travels with the stack so `/buildinggadgets2` can name its count; it removes nothing.
     pub destroy_plan: Option<Vec<[i32; 3]>>,
+    /// Slice 0.2.8: the same for the exchange gadget — the destinations it would swap,
+    /// stored on its own stack. It places and removes nothing (the build stays held).
+    pub exchange_plan: Option<Vec<[i32; 3]>>,
 }
 
 impl Default for GadgetState {
@@ -61,6 +64,7 @@ impl Default for GadgetState {
             mode: runtime::DEFAULT_MODE,
             place_on_top: false,
             destroy_plan: None,
+            exchange_plan: None,
         }
     }
 }
@@ -115,25 +119,28 @@ fn read_state(stack: &ItemStack) -> GadgetState {
         })
         .unwrap_or(runtime::DEFAULT_MODE);
     let place_on_top = matches!(tag.get("place_on_top"), Some(Tag::Byte(1)));
-    let destroy_plan = tag.get("destroy_plan").and_then(|tag| match tag {
-        Tag::List(rows) => rows
-            .iter()
-            .map(|row| match row {
-                Tag::List(parts) => match parts.as_slice() {
-                    [Tag::Int(x), Tag::Int(y), Tag::Int(z)] => Some([*x, *y, *z]),
+    let plan = |key: &str| {
+        tag.get(key).and_then(|tag| match tag {
+            Tag::List(rows) => rows
+                .iter()
+                .map(|row| match row {
+                    Tag::List(parts) => match parts.as_slice() {
+                        [Tag::Int(x), Tag::Int(y), Tag::Int(z)] => Some([*x, *y, *z]),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>(),
-        _ => None,
-    });
+                })
+                .collect::<Option<Vec<_>>>(),
+            _ => None,
+        })
+    };
     GadgetState {
         range,
         selected,
         mode,
         place_on_top,
-        destroy_plan,
+        destroy_plan: plan("destroy_plan"),
+        exchange_plan: plan("exchange_plan"),
     }
 }
 
@@ -149,18 +156,24 @@ fn write_state(stack: &mut ItemStack, state: &GadgetState) {
     if let Some(selected) = &state.selected {
         entries.push(("selected", Tag::String(selected.as_str().into())));
     }
+    let rows = |plan: &[[i32; 3]]| {
+        Tag::List(
+            plan.iter()
+                .map(|cell| {
+                    Tag::List(
+                        cell.iter()
+                            .map(|value| Tag::Int(*value))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
     if let Some(plan) = &state.destroy_plan {
-        let rows = plan
-            .iter()
-            .map(|cell| {
-                Tag::List(
-                    cell.iter()
-                        .map(|value| Tag::Int(*value))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
-        entries.push(("destroy_plan", Tag::List(rows)));
+        entries.push(("destroy_plan", rows(plan)));
+    }
+    if let Some(plan) = &state.exchange_plan {
+        entries.push(("exchange_plan", rows(plan)));
     }
     let _ = stack.set(&GadgetStateComponent, Tag::compound(entries));
 }
@@ -183,11 +196,13 @@ fn held_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemSta
     held_stack(host, player).filter(|(_, stack)| stack.item().id(host) == runtime::GADGET)
 }
 
-/// Either of the two gadgets, for the shared range/command paths.
+/// Any of the three gadgets, for the shared range/command paths. The destruction and
+/// exchange gadgets carry the same `gadget_state` component as the building gadget, so
+/// `/buildinggadgets2 range` and the wheel step work while either is held.
 fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
     held_stack(host, player).filter(|(_, stack)| {
         let id = stack.item().id(host);
-        id == runtime::GADGET || id == DESTROY_GADGET
+        id == runtime::GADGET || id == DESTROY_GADGET || id == EXCHANGE_GADGET
     })
 }
 
@@ -195,8 +210,8 @@ fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, Ite
 /// and the slot set back (the component write is not visible on the borrowed stack
 /// the hook is handed).
 fn write_held(host: &mut dyn ServerHost, player: PlayerRef, state: &GadgetState) -> bool {
-    // Both gadgets carry the same component: the destruction plan travels on its stack
-    // exactly as the building gadget's selection and range do.
+    // All three gadgets carry the same component: the destruction/exchange plans travel
+    // on their stacks exactly as the building gadget's selection and range do.
     let Some((slot, mut stack)) = held_any_gadget(host, player) else {
         return false;
     };
@@ -545,6 +560,7 @@ fn use_on_block(
             mode: state.mode,
             place_on_top: state.place_on_top,
             destroy_plan: state.destroy_plan,
+            exchange_plan: state.exchange_plan,
         };
         if !write_held(host, player, &selected) {
             return None;
@@ -641,6 +657,7 @@ fn use_on_destroy(
             mode: state.mode,
             place_on_top: state.place_on_top,
             destroy_plan: Some(cells.clone()),
+            exchange_plan: state.exchange_plan,
         };
         if !write_held(host, player, &next) {
             return None;
@@ -675,6 +692,83 @@ impl ItemPart for DestroyGadget {
             return None;
         }
         use_on_destroy(host, event)
+    }
+}
+
+/// A right click with the exchange gadget: a sneak click plans the cells
+/// `BuildingUtils.exchange` would swap and stores the plan on the stack; a plain click
+/// writes nothing. The plan is the deliverable — no block is replaced and no item is
+/// paid, so the 0.2.4 build hold stays exactly where it was.
+fn use_on_exchange(
+    host: &mut dyn ServerHost,
+    event: &mut UseOnEvent<'_>,
+) -> Option<InteractionResult> {
+    let player = host.player(event.player)?;
+    if player.is_spectator(host) == Some(true) {
+        return None;
+    }
+    let level = player.level(host)?;
+    let state = read_state(event.stack);
+    if player.is_secondary_use_active(host).unwrap_or(false) {
+        // `BaseMode.isExchangingValid` refuses air: a destination plan needs a real
+        // block under the crosshair, as the destruction gadget's does.
+        let clicked = level.block_state(host, event.pos)?;
+        let air = host
+            .block_states()
+            .name(clicked.block())
+            .ok()
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                )
+            });
+        if air {
+            return None;
+        }
+        let mut world = LevelDestroyWorld { host, level };
+        let cells = runtime::exchange_plan(&mut world, event.pos, state.range);
+        let next = GadgetState {
+            range: state.range,
+            selected: state.selected,
+            mode: state.mode,
+            place_on_top: state.place_on_top,
+            destroy_plan: state.destroy_plan,
+            exchange_plan: Some(cells.clone()),
+        };
+        if !write_held(host, player, &next) {
+            return None;
+        }
+        let _ = player.action_bar(host, Text::literal(runtime::exchange_reply(cells.len())));
+        return Some(InteractionResult::SuccessServer);
+    }
+    // The hold: no exchange call exists that names the acting player and lets a protection
+    // mod veto one cell, and this slice is a plan + readout only.
+    let _ = player.action_bar(
+        host,
+        Text::literal(format!(
+            "Exchanging Gadget: held (blocked: {}) - 0 placed, 0 removed",
+            runtime::NO_CANCELLABLE_PLACEMENT
+        )),
+    );
+    Some(InteractionResult::SuccessServer)
+}
+
+/// The exchange gadget's behaviour, attached to `buildinggadgets2:gadget_exchanging` in
+/// `Hooks::register`. As a Part it is asked only for that item.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExchangeGadget;
+
+#[mod_api::horizon_part]
+impl ItemPart for ExchangeGadget {
+    fn use_on(&self, host: HostSide<'_>, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
+        if event.hand != Hand::Main {
+            return None;
+        }
+        use_on_exchange(host, event)
     }
 }
 
@@ -767,25 +861,26 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
     match parsed {
         GadgetCommand::Status => {
             let held = player.and_then(|player| held_any_gadget(host, player));
-            let is_destroy = held
-                .as_ref()
-                .is_some_and(|(_, stack)| stack.item().id(host) == DESTROY_GADGET);
+            let held_id = held.as_ref().map(|(_, stack)| stack.item().id(host));
             let state = held.map_or_else(GadgetState::default, |(_, stack)| read_state(&stack));
-            // The destruction gadget's readout names the planned cell count (0 before a plan).
-            // The building gadget's readout is the state string the component holds, so the
-            // cleaned selection (`cleanBlockState`) stays observable.
-            let line = if is_destroy {
-                runtime::destroy_status_reply(
+            // The destruction and exchange gadgets' readouts name their planned cell count
+            // (0 before a plan). The building gadget's readout is the state string the
+            // component holds, so the cleaned selection (`cleanBlockState`) stays observable.
+            let line = match held_id.as_deref() {
+                Some(id) if id == DESTROY_GADGET => runtime::destroy_status_reply(
                     state.range,
                     state.destroy_plan.as_ref().map(Vec::len),
-                )
-            } else {
-                runtime::status_reply(
+                ),
+                Some(id) if id == EXCHANGE_GADGET => runtime::exchange_status_reply(
+                    state.range,
+                    state.exchange_plan.as_ref().map(Vec::len),
+                ),
+                _ => runtime::status_reply(
                     state.mode,
                     state.range,
                     state.selected.as_deref(),
                     state.place_on_top,
-                )
+                ),
             };
             reply(host, player, line);
         }
@@ -809,6 +904,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 mode: current.mode,
                 place_on_top: current.place_on_top,
                 destroy_plan: current.destroy_plan,
+                exchange_plan: current.exchange_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_range_reply(value));
@@ -837,6 +933,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 mode,
                 place_on_top: current.place_on_top,
                 destroy_plan: current.destroy_plan,
+                exchange_plan: current.exchange_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_mode_reply(mode));
@@ -865,6 +962,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 mode: current.mode,
                 place_on_top: enabled,
                 destroy_plan: current.destroy_plan,
+                exchange_plan: current.exchange_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_place_on_top_reply(enabled));
@@ -909,7 +1007,7 @@ pub fn scroll(host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flo
         return Flow::Continue;
     };
     let id = stack.item().id(host);
-    if id != runtime::GADGET && id != DESTROY_GADGET {
+    if id != runtime::GADGET && id != DESTROY_GADGET && id != EXCHANGE_GADGET {
         return Flow::Continue;
     }
     let state = read_state(&stack);

@@ -40,6 +40,10 @@ impl Hooks for Mod {
         // part is scoped to that item, so the two gadgets cannot answer each other's clicks.
         let destroy = registrar.item_key(runtime::DESTROY_GADGET);
         registrar.item_part(destroy, support::DestroyGadget);
+        // Slice 0.2.8: the exchange gadget plans a destination on a sneak click with the
+        // same three measured queries; its part is scoped to the jar's `gadget_exchanging`.
+        let exchange = registrar.item_key(runtime::EXCHANGE_GADGET);
+        registrar.item_part(exchange, support::ExchangeGadget);
     }
 
     /// Declare the component that holds the gadget's range and selection, before
