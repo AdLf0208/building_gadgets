@@ -44,6 +44,10 @@ impl Hooks for Mod {
         // same three measured queries; its part is scoped to the jar's `gadget_exchanging`.
         let exchange = registrar.item_key(runtime::EXCHANGE_GADGET);
         registrar.item_part(exchange, support::ExchangeGadget);
+        // Slice 0.2.9: the Copy/Paste gadget collects a destination plan on a sneak
+        // click. The jar's id is `gadget_copy_paste` (the Java class is `GadgetCopyPaste`).
+        let copy = registrar.item_key(runtime::COPY_GADGET);
+        registrar.item_part(copy, support::CopyGadget);
     }
 
     /// Declare the component that holds the gadget's range and selection, before

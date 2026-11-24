@@ -1,6 +1,35 @@
 # Validation
 
-## 0.2.8 (the current package)
+## 0.2.9 (the current package)
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 8 carries the Copy/Paste gadget
+under the jar's `gadget_copy_paste` id (the brief's `gadget_paste` ships in no file):
+its item, recipe and a sneak-click Copy-mode destination collection on the same
+one-layer rule as 0.2.7/0.2.8. The build, the swap and the real paste stay held
+(`blocked: no-cancellable-placement`); `RenderBlock` stays
+`blocked(no-render-block-surface)`. Full narrative and red/green quotes in
+[`notes.md`](notes.md) → `## Slice 8`.
+
+| Check | Result |
+|---|---|
+| `cargo test` | 65 passed, 0 failed (red first: 60 passed / 5 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice from the final tree (`rm -f Cargo.lock` each) | 70,665 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | 0.2.9 `native-mod` / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` / `check-recipe-types.py buildinggadgets2` | 1/1 (`package matches the tree`, R9 green) / `ok` |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` (stale `native-*` tag removed first) |
+| `tools/e2e.sh` (22 phases, four recipes) | `PASS` + `EXIT:0` |
+| `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL` (unknown gadget id) + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 22 phases reject the inverted counts (38 assertions) + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 19/19 (the 16 prior legs stay green) |
+
+Artifact: `buildinggadgets2.hmod` 70,665 B, sha256
+`3aea36e6258ad79569b1b0846ab05e03c201286de8ac03ee03555cf9a02d29f8`, 37 entries, no packed
+`Cargo.lock`; declared version 0.2.9. Details in [`notes.md`](notes.md) → `## Slice 8` →
+`**Package.**`.
+
+## 0.2.8 (previous)
 
 Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 7 adds the exchange gadget's

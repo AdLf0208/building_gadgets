@@ -1876,3 +1876,190 @@ block-entity data copy that the real paste needs. **In-game assertion:** hold
 "/buildinggadgets2"` then `ctl messages 4 | jq -r '.actionbar'` must parse to a count of
 1 (both refused) and 3 with two ordinary stones there, both with 0 placed/0 removed,
 and `SELFTEST=1` must invert both counts.
+
+## Slice 8 — the Copy/Paste gadget's destination plan (2026-11-24, version 0.2.9)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Coverage — every family in the jar (0.2.8)`:
+*`paste/rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices`*.
+Class content, tier deep. The Copy/Paste gadget's Copy-mode collection is the same
+pure layer/plan shape as 0.2.7/0.2.8, so a **plan + readout** lands without the held
+write, the rendered paste, the anchor, the wheel screen or the block-entity data copy.
+`BuildingUtils.build`/`exchange` and `removeTickHandler` are not called; the 0.2.4
+placement hold stays intact.
+
+### The plan rules as read from the jar and the same `1.21.1` clone (`11cd2efb`)
+
+- `common/items/GadgetCopyPaste.java:69-95` `onAction`: Copy sets the start pos and calls
+  `buildAndStore` (the collection); Paste reads `BG2Data`'s stored list and hands it to
+  `BuildingUtils.build`/`exchange` — the write this slice withholds. `:102-116`
+  `onShiftAction` sets the end pos and collects. `:118-125` `buildAndStore` calls
+  `new Copy().collect(...)` and prints `messages.copyblocks` ("Copied %d blocks").
+- `util/modes/Copy.java:36-73` `collectWorld`: iterate the AABB between the two clicked
+  corners, keep a cell when `GadgetUtils.isValidBlockState(state)` and it is not a
+  `RenderBlock`; write AIR for a refused cell so the list has an entry per position.
+  The area caps (500 per axis, 100000 cells) are out of this slice's one-layer rig.
+- `util/GadgetUtils.java:49-53` `isValidBlockState`: `!BG2DENY && getDestroySpeed >= 0 &&
+  (fluid empty || source)`.
+
+**The id comes from the artefact, not the brief.** The jar's item model, recipe result
+and lang id are `buildinggadgets2:gadget_copy_paste` ("Copy Paste Gadget");
+`GadgetCopyPaste` is the Java *class*, and the 0.2.9 brief's `gadget_paste` is shipped
+by no file in the jar. The plan declares the jar's id, and the report records the
+discrepancy (as 0.2.8 did for `gadget_exchanging`). Its recipe is the jar's
+`iri / ere / ili` with `c:gems/emerald`, `c:ingots/iron`, `c:dusts/redstone` and
+`c:gems/lapis` resolved to concrete items; the jar's model and 16×16 texture are
+carried byte-for-byte (texture sha256
+`1d3d6e82f9fe071befca26f2dddca1bbe0844ac25a4c59b2a98381407a63ffde`).
+
+| Rule | Pin query | Verdict |
+|---|---|---|
+| air | `BlockMetadata::name(state.block())` -> `minecraft:{air,cave_air,void_air}` | **carried** |
+| `destroy_speed < 0` | `BlockStates::destroy_speed` (stamped, bedrock −1 in 26.3) | **carried** |
+| deny-tag member | `Host::block_in_tag(block, "buildinggadgets2:deny")` (merged tag) | **carried** |
+| `RenderBlock` | no stamped block-class surface at `0a875da` | **`blocked(no-render-block-surface)`** — unchanged |
+
+The three queryable clauses are exactly the destruction planner's predicate, so
+`copy_plan` reuses `layer_plan` and `destroyable` verbatim — the verified layer maths
+was not re-derived. The fluid, block-entity, fuzzy/compare and real paste clauses are
+recorded, not faked.
+
+### What shipped
+
+1. **`runtime`:** `COPY_GADGET = "buildinggadgets2:gadget_copy_paste"`, `copy_plan`,
+   `copy_reply` and `copy_status_reply`. Both replies keep the hold explicit:
+   `0 placed, 0 removed (blocked: no-cancellable-placement)`.
+2. **`support`:** `GadgetState.copy_plan` travels in the same component under the
+   `copy_plan` key; an item-scoped `CopyGadget` Part collects on a sneak click and
+   writes nothing on a plain click; `/buildinggadgets2` names that stack's collected
+   count; the range command and wheel accept the fourth gadget; all earlier replies
+   are unchanged.
+3. **Content:** `gadget_copy_paste` item definition, the jar's model/texture, the
+   concrete-id recipe, its advancement, lang name and creative-tab entry; a new
+   `tools/craft_copy.py` real-table craft leg with a missing-lapis control.
+
+### Red → green (verbatim)
+
+Six new tests were run first against stubs (`copy_plan -> Vec::new()`, both replies
+`""`) from `ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.9-copy.log`
+(`EXIT:101`), **60 passed, 5 failed** (the id test is data and passed):
+
+```
+---- runtime::tests::copy_plan_excludes_the_tag_member_and_the_unbreakable_block stdout ----
+thread 'runtime::tests::copy_plan_excludes_the_tag_member_and_the_unbreakable_block' (198610) panicked at src/runtime.rs:2213:9:
+assertion `left == right` failed: the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept
+  left: []
+ right: [[-2, 150, 0], [-1, 150, 0], [0, 150, 0]]
+```
+
+Green: **65 passed, 0 failed** (`sdk-test.log`). The new tests are
+`the_copy_gadget_id_is_the_jars_item_id`,
+`copy_plan_excludes_the_tag_member_and_the_unbreakable_block`,
+`copy_plan_with_ordinary_stones_includes_both`, `copy_plan_skips_air`,
+`copy_reply_names_the_count_and_the_hold` and
+`copy_status_reply_names_the_range_and_the_plan`.
+
+### In game (fail-capable, on the delivered bytes)
+
+Two phases in `tools/e2e.sh`, the same rig as the destruction/exchange pairs; the
+whole y=150 layer is cleared first, a stone sits at (0,150,0) and the two cells
+(1,150,0)/(2,150,0) are read back before the click. The parsed status is read with
+`ctl chat "/buildinggadgets2"` then `ctl messages 4 | jq -r '.actionbar'`.
+
+```
+== copy phase copy_refusals: two cells beside the clicked stone, 1 collected ==
+  cells (1,150,0) and (2,150,0): minecraft:piston_head, minecraft:bedrock
+  plan reply: Copy Paste Gadget: copied 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Copy Paste Gadget: range 5, copied 1 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+== copy phase copy_control: two cells beside the clicked stone, 3 collected ==
+  cells (1,150,0) and (2,150,0): minecraft:stone, minecraft:stone
+  plan reply: Copy Paste Gadget: copied 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Copy Paste Gadget: range 5, copied 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+```
+
+The pair is the proof: a read that always refuses the tag/speed reports 3 in the
+first rig, one that always accepts them reports 1 in the control rig. `SELFTEST=1`
+swaps both expectations (1→3 and 3→1), so one run proves both directions reject.
+The carried Copy/Paste recipe is crafted with all ingredients consumed
+(iron×4, redstone×2, emerald×2, lapis×1) and a lapis-free control matches nothing.
+The control game refuses `buildinggadgets2:gadget_copy_paste` as an unknown id.
+
+### Coverage — every family in the jar (0.2.9)
+
+Replaces the 0.2.8 table; unchanged rows keep their verdicts.
+
+| Family | Status |
+|---|---|
+| the eight building modes, place-on-top, borders, per-cell gate | tested — phases as in 0.2.8, 0 written, 0 spent |
+| `cleanBlockState` — denied/kept properties, `age` instances | tested — `clean_selection`, `clean_transient` and the six unit tests |
+| `buildinggadgets2:deny` — selection and build destination | tested — `deny_selection`, `deny_destination_control` (8), `deny_destination` (6) |
+| the building gadget's status readout | tested — names the cleaned state string |
+| carried building recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried destruction recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried exchange recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| destruction destination — air / speed / deny tag / `RenderBlock` | tested (three queries) / `blocked(no-render-block-surface)` |
+| destruction plan readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| exchange destination — air / speed / deny tag / `RenderBlock` | tested (three queries) / `blocked(no-render-block-surface)` |
+| exchange plan readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| **carried Copy/Paste recipe** | tested — crafted with iron×4/redstone×2/emerald×2/lapis×1 consumed, missing-lapis control empty |
+| **Copy destination — air** | unit tested — `copy_plan_skips_air` |
+| **Copy destination — `destroy_speed < 0`** | tested — phase `copy_refusals` (`minecraft:bedrock` excluded) |
+| **Copy destination — deny tag** | tested — phase `copy_refusals` (`minecraft:piston_head` excluded), control includes two stones |
+| **Copy destination — `RenderBlock` / fluid / block entity / fuzzy** | `blocked(no-render-block-surface)` for the block-class line; settings-gated Java clauses not ported in this plan-only slice |
+| **Copy collection readout + gadget id** | tested — parsed action bar and status counts in both rigs; `SELFTEST` inverts both; id resolved packaged, refused in control |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| block removal/swap/paste, undo, energy and the mode/range screens | not ported — plan-only slices; `removeTickHandler`/`build`/`exchange` are not called |
+| rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices |
+| preview | `blocked(no-client-held-stack-components)` — unchanged |
+
+### Gaps (0.2.9)
+
+The 0.2.8 list holds with one closure: the Copy/Paste destination collection is
+carried (with its `RenderBlock` line `blocked(no-render-block-surface)`); the real
+paste, its block-entity data copy, the undo list, energy and the range screen are
+not. The build stays held (`blocked: no-cancellable-placement`), the preview stays
+`blocked(no-client-held-stack-components)`, and the other gadgets are unchanged.
+
+### Verification (0.2.9)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **65 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.9-copy.log`, 60/5, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 (`sdk-clippy.log`, `sdk-fmt.log`) |
+| `cargo horizon-mod build` twice from the final tree, `rm -f Cargo.lock` before each | **70,665 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`, `sdk-build-final.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.9 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` / `fits --build 0b14f8a…` | `made for` / `fits` (`sdk-fits.log`, `sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1, `package matches the tree`, R9 green |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` after removing the stale `native-*` tag carrying this mod (`launcher-build-0.2.9.log`); new tag `native-0a875da-9a9939180a36` |
+| e2e (modded, 22 phases, four recipes) | `PASS` + `EXIT:0` (`e2e-copy.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the destruction gadget id … is unknown` + `EXIT:1` (`e2e-copy-control.log`) |
+| e2e (`SELFTEST=1`) | all 22 phases rejected the inverted expectations (38 assertions), `FAIL` + `EXIT:1`; both copy phases swap 1↔3 (`e2e-copy-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | **19/19** — the 16 earlier legs stay green |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **70,665 B**, sha256
+`3aea36e6258ad79569b1b0846ab05e03c201286de8ac03ee03555cf9a02d29f8`, **37 entries** (the
+six new Copy/Paste files included: item, model, texture, data item, recipe, advancement),
+no packed `Cargo.lock`; declared version **0.2.9**; `src/runtime.rs` sha256
+`63897d041271…` in the tree and in the archive. The game leg was rebuilt from this tree
+after the docs were written (`Compiling buildinggadgets2 (1 of 1)`), so the bytes under
+test are the bytes delivered.
+
+### Changelog (0.2.9)
+
+> **Building Gadgets 2 0.2.9** — the Copy/Paste gadget is carried under the jar's
+> item id `buildinggadgets2:gadget_copy_paste` (`GadgetCopyPaste` is the Java class;
+> the brief's `gadget_paste` is shipped by no file): its item, recipe, the jar's
+> model/texture and a sneak-click Copy-mode destination collection on the same
+> one-layer rule as the destruction and exchange gadgets. The collection refuses
+> air, an unbreakable block (`destroy_speed < 0`) and a `buildinggadgets2:deny`
+> member with the three stamped queries; upstream's `RenderBlock` clause is
+> `blocked(no-render-block-surface)` and the fluid/block-entity/fuzzy clauses need
+> settings this pin does not stamp. The collected cells are stored on the stack and
+> `/buildinggadgets2` names their count with 0 placed and 0 removed. The parsed
+> in-game pair is 1 collected cell with a deny-tag piston head and a bedrock beside
+> the click and 3 with two ordinary stones there; nothing is pasted. The build, the
+> swap and the real paste stay held (`blocked: no-cancellable-placement`) and the
+> preview stays `blocked(no-client-held-stack-components)`.

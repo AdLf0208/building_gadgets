@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "group": "buildinggadgets2",
+  "pattern": [
+    "iri",
+    "ere",
+    "ili"
+  ],
+  "key": {
+    "i": "minecraft:iron_ingot",
+    "r": "minecraft:redstone",
+    "e": "minecraft:emerald",
+    "l": "minecraft:lapis_lazuli"
+  },
+  "result": {
+    "id": "buildinggadgets2:gadget_copy_paste",
+    "count": 1
+  }
+}

@@ -280,6 +280,46 @@ pub fn exchange_status_reply(range: u32, planned: Option<usize>) -> String {
     )
 }
 
+/// The Copy/Paste gadget (slice 0.2.9). The 1.3.9 jar names the item
+/// `buildinggadgets2:gadget_copy_paste` (`GadgetCopyPaste` is the Java *class*; the 0.2.9
+/// brief's `gadget_paste` is shipped by no file in the jar). Copy mode's collection keeps
+/// the cells `GadgetUtils.isValidBlockState` accepts — the same three queried clauses as
+/// the destruction/exchange planners — and writes AIR for a refused cell. The stored list
+/// and the `BuildingUtils.build`/`exchange` call Paste mode makes stay held.
+pub const COPY_GADGET: &str = "buildinggadgets2:gadget_copy_paste";
+
+/// The Copy-mode destination collection. `Copy.collectWorld` walks the clicked area and
+/// keeps the cells whose block state is valid; this slice's one-layer rig uses the same
+/// shared `layer_plan` and three-clause predicate as 0.2.7/0.2.8, so the verified layer
+/// maths is not re-derived. Air, an unbreakable block and a deny-tag member are excluded.
+#[must_use]
+pub fn copy_plan(
+    world: &mut impl DestroyWorld,
+    clicked: [i32; 3],
+    range: u32,
+) -> Vec<[i32; 3]> {
+    layer_plan(world, clicked, range, destroyable)
+}
+
+/// The action bar line after a Copy collection: the count and the honest hold (nothing
+/// is pasted, so 0 cells are placed and 0 removed).
+#[must_use]
+pub fn copy_reply(count: usize) -> String {
+    let cells = if count == 1 { "cell" } else { "cells" };
+    format!(
+        "Copy Paste Gadget: copied {count} {cells}, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})"
+    )
+}
+
+/// The `/buildinggadgets2` status line while the Copy/Paste gadget is held.
+#[must_use]
+pub fn copy_status_reply(range: u32, planned: Option<usize>) -> String {
+    format!(
+        "Copy Paste Gadget: range {range}, copied {} cells, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
+        planned.unwrap_or(0)
+    )
+}
+
 /// One property of a block's state as the game publishes it: its name and how many values it
 /// allows. The count is part of upstream's identity: `GadgetUtils.DENY_PROPERTIES` lists eight
 /// distinct `IntegerProperty` instances named `age`, so `AGE_7` (eight values) is denied while a
@@ -2151,6 +2191,87 @@ mod tests {
         assert_eq!(
             exchange_status_reply(5, None),
             "Exchanging Gadget: range 5, planned 0 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    // --- Slice 0.2.9: the Copy/Paste gadget's destination plan ------------------------
+
+    #[test]
+    fn the_copy_gadget_id_is_the_jars_item_id() {
+        assert_eq!(COPY_GADGET, "buildinggadgets2:gadget_copy_paste");
+    }
+
+    #[test]
+    fn copy_plan_excludes_the_tag_member_and_the_unbreakable_block() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::tagged());
+        grid.cells.insert([2, 150, 0], CellFacts::bedrock());
+        grid.cells.insert([-1, 150, 0], CellFacts::stone());
+        grid.cells.insert([-2, 150, 0], CellFacts::stone());
+        let cells = copy_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[-2, 150, 0], [-1, 150, 0], [0, 150, 0]],
+            "the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept"
+        );
+    }
+
+    #[test]
+    fn copy_plan_with_ordinary_stones_includes_both() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::stone());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = copy_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [1, 150, 0], [2, 150, 0]],
+            "the same rig with two ordinary stones includes both"
+        );
+    }
+
+    #[test]
+    fn copy_plan_skips_air() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::air());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = copy_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [2, 150, 0]],
+            "air is not a collected destination"
+        );
+    }
+
+    #[test]
+    fn copy_reply_names_the_count_and_the_hold() {
+        assert_eq!(
+            copy_reply(3),
+            "Copy Paste Gadget: copied 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            copy_reply(1),
+            "Copy Paste Gadget: copied 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    #[test]
+    fn copy_status_reply_names_the_range_and_the_plan() {
+        assert_eq!(
+            copy_status_reply(5, Some(3)),
+            "Copy Paste Gadget: range 5, copied 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            copy_status_reply(5, None),
+            "Copy Paste Gadget: range 5, copied 0 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
         );
     }
 }

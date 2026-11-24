@@ -11,15 +11,18 @@ back to the block's own default while the orientation ones (`facing`, `axis`,
 `hinge`, `powered`, `shape`) are carried over, and `/buildinggadgets2` names the
 stored state string. The carried `buildinggadgets2:deny` block tag refuses a sneak
 click on any of its members (upstream's `Invalid Block`) and a build destination
-whose block it names. Two more gadgets are carried as **destination plans only**
-(the write stays held): the destruction gadget (`gadget_destruction`) and the
-exchange gadget (`gadget_exchanging`, the jar's item id; `GadgetExchanger` is the
-Java class). A sneak click with either plans a horizontal layer around the clicked
+whose block it names. Three more gadgets are carried as **destination plans only**
+(the write stays held): the destruction gadget (`gadget_destruction`), the exchange
+gadget (`gadget_exchanging`, the jar's item id; `GadgetExchanger` is the Java class)
+and the Copy/Paste gadget (`gadget_copy_paste`, the jar's item id; `GadgetCopyPaste`
+is the Java class — the 0.2.9 brief's `gadget_paste` is shipped by no file). A sneak
+click with any of them plans or collects a horizontal layer around the clicked
 block, refusing air, a `destroy_speed < 0` block (bedrock) and a
 `buildinggadgets2:deny` member (piston head); `/buildinggadgets2` names the cell
-count with `0 placed, 0 removed` (exchange) or `0 removed` (destruction). Upstream's
-`RenderBlock` clause is recorded `blocked(no-render-block-surface)` — the pin has no
-stamped block-class query. Nothing is removed or swapped.
+count with `0 placed, 0 removed` (exchange and Copy/Paste) or `0 removed`
+(destruction). Upstream's `RenderBlock` clause is recorded
+`blocked(no-render-block-surface)` — the pin has no stamped block-class query.
+Nothing is removed, swapped or pasted.
 
 **The build is held in this version.** The SDK at the campaign pin has no
 placement call that names the acting player *and* lets a protection mod cancel
@@ -41,20 +44,21 @@ against the pinned game build; the SDK in `.horizon/sdk/` is fetched by
 `cargo horizon-mod` and never packed.
 
 ```text
-horizon-mod.toml               id, version 0.2.8, api 0.2, side both, [native] pins
+horizon-mod.toml               id, version 0.2.9, api 0.2, side both, [native] pins
 Cargo.toml                     one crate; the only dependency is horizon-mod-api
-src/lib.rs                     the one `impl Hooks` (three item parts, component, commands, wheel)
-src/support.rs                 game glue: component, inventory, the cleaned selection, the two destination plans, commands, wheel
-src/runtime.rs                 pure mode planners, the selection rules (deny tag, cleanBlockState), the shared destruction/exchange destination rule and plans, the placement hold, the border gate (59 tests)
-assets/buildinggadgets2/       item definitions, models, textures, lang (three gadgets)
+src/lib.rs                     the one `impl Hooks` (four item parts, component, commands, wheel)
+src/support.rs                 game glue: component, inventory, the cleaned selection, the three destination plans, commands, wheel
+src/runtime.rs                 pure mode planners, the selection rules (deny tag, cleanBlockState), the shared destruction/exchange/Copy destination rule and plans, the placement hold, the border gate (65 tests)
+assets/buildinggadgets2/       item definitions, models, textures, lang (four gadgets)
 data/buildinggadgets2/         item behaviour rows, recipes, advancements, tab, the deny tag
 LICENSE, LICENSE-NOTICE.md     the MIT text and where the port came from (packed)
 icon.png                       optional package icon (packed)
 buildinggadgets2.hmod          the delivered package
-tools/e2e.sh                   fail-capable in-game check (three recipes, every mode, borders, the deny tag, the cleaned selection, both destination plans)
+tools/e2e.sh                   fail-capable in-game check (four recipes, every mode, borders, the deny tag, the cleaned selection, all three destination plans)
 tools/craft_gadget.py          crafts the carried building recipe in a real crafting table
 tools/craft_destruction.py     crafts the carried destruction recipe in a real crafting table
 tools/craft_exchanging.py      crafts the carried exchange recipe in a real crafting table
+tools/craft_copy.py            crafts the carried Copy/Paste recipe in a real crafting table
 notes.md, FINDINGS.md, VALIDATION.md, REPIN-AUDIT.md
 ```
 
@@ -64,7 +68,7 @@ Run these in the port; the SDK layout needs no staging (`CARGO_INCREMENTAL=0`,
 no `--target-dir`).
 
 ```sh
-CARGO_INCREMENTAL=0 cargo test                            # 59 runtime tests
+CARGO_INCREMENTAL=0 cargo test                            # 65 runtime tests
 CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
 cargo fmt --check                                          # NOT --all: it would format the SDK
 rm -f Cargo.lock                                           # a packed lock changes the artifact
@@ -83,7 +87,7 @@ native mod is compiled into `horizon-client`:
 ```sh
 ports/tools/launcher-game.sh build buildinggadgets2
 eval "$(ports/tools/launcher-game.sh env buildinggadgets2)"
-bash tools/e2e.sh                    # 3 recipes + 9 modes + 2 borders + 3 deny-tag + 2 clean-state + 2 destruction + 2 exchange phases: PASS
+bash tools/e2e.sh                    # 4 recipes + 9 modes + 2 borders + 3 deny-tag + 2 clean-state + 2 destruction + 2 exchange + 2 Copy/Paste phases: PASS
 GAME=$CONTROL_GAME bash tools/e2e.sh # no package: FAIL (recipe/id unknown)
 SELFTEST=1 bash tools/e2e.sh         # every phase inverted: FAIL
 ```
@@ -104,11 +108,12 @@ clean-state phases close the selection family: a lit furnace's stored state is
 `minecraft:furnace[facing=west,lit=false]` (`lit` dropped, `facing` kept) and a
 ripe wheat's is `minecraft:wheat[age=0]`, both read back from `/buildinggadgets2`
 — 0.2.5's raw state string is the inverted expectation, so a run that stores the
-click as it was read fails the phase. Two destruction phases and two exchange
-phases close the destination-plan families: each rig puts a deny-tag piston head
-and a `-1`-speed bedrock beside the clicked stone (1 planned cell) and the control
-puts two ordinary stones there (3 planned cells), with the exact action bar and
-parsed `/buildinggadgets2` replies asserted in both directions by `SELFTEST=1`.
+click as it was read fails the phase. Two destruction phases, two exchange
+phases and two Copy/Paste phases close the destination-plan families: each rig
+puts a deny-tag piston head and a `-1`-speed bedrock beside the clicked stone
+(1 planned/collected cell) and the control puts two ordinary stones there
+(3 cells), with the exact action bar and parsed `/buildinggadgets2` replies
+asserted in both directions by `SELFTEST=1`.
 Neither rig loses or gains a block.
 
 ## Scope and gaps
@@ -117,9 +122,10 @@ All eight building modes, the mode/place-on-top commands, the cleaned selection
 (`cleanBlockState`), the `buildinggadgets2:deny` tag (selection and destination)
 and the per-destination placement gate (build permission, `mayUseItemAt`, the
 world border with its exclusive upper edges, a dedicated server's spawn
-protection), and the destruction and exchange gadgets' destination plans are
-ported; the writes themselves are held as described above. The radial mode wheel (a client screen),
+protection), and the destruction, exchange and Copy/Paste gadgets' destination
+plans are ported; the writes themselves are held as described above. The radial
+mode wheel (a client screen),
 the anchor, undo, energy, the GUI/tooltip, bound inventories, the preview/
-build-animation queue, the actual block removal/swap, and the paste/rotate/cut
-gadgets are deferred; see `notes.md` (its `## Review repair (0.2.4)` and `### Gaps`
-sections) for the exact list.
+build-animation queue, the actual block removal/swap/paste, the block-entity data
+copy the real paste needs, and the rotate/cut gadgets are deferred; see `notes.md`
+(its `## Review repair (0.2.4)` and `### Gaps` sections) for the exact list.
