@@ -293,11 +293,7 @@ pub const COPY_GADGET: &str = "buildinggadgets2:gadget_copy_paste";
 /// shared `layer_plan` and three-clause predicate as 0.2.7/0.2.8, so the verified layer
 /// maths is not re-derived. Air, an unbreakable block and a deny-tag member are excluded.
 #[must_use]
-pub fn copy_plan(
-    world: &mut impl DestroyWorld,
-    clicked: [i32; 3],
-    range: u32,
-) -> Vec<[i32; 3]> {
+pub fn copy_plan(world: &mut impl DestroyWorld, clicked: [i32; 3], range: u32) -> Vec<[i32; 3]> {
     layer_plan(world, clicked, range, destroyable)
 }
 
@@ -316,6 +312,43 @@ pub fn copy_reply(count: usize) -> String {
 pub fn copy_status_reply(range: u32, planned: Option<usize>) -> String {
     format!(
         "Copy Paste Gadget: range {range}, copied {} cells, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
+        planned.unwrap_or(0)
+    )
+}
+
+/// The Cut/Paste gadget (slice 0.2.10). The 1.3.9 jar names the item
+/// `buildinggadgets2:gadget_cut_paste` (`GadgetCutPaste` is the Java *class*). Its Cut-mode
+/// collection keeps the cells `GadgetUtils.isValidBlockState` accepts — the same three
+/// queried clauses as the destruction/exchange/copy planners — and writes AIR for a refused
+/// cell. The stored list and the `BuildingUtils.buildWithTileData`/`removeTickHandler` calls
+/// Paste/Cut make stay held.
+pub const CUT_GADGET: &str = "buildinggadgets2:gadget_cut_paste";
+
+/// The Cut-mode destination collection. `GadgetCutPaste.cutAndStore` walks the clicked AABB
+/// and keeps the cells whose block state is valid; this slice's one-layer rig uses the same
+/// shared `layer_plan` and three-clause predicate as 0.2.7/0.2.8/0.2.9, so the verified layer
+/// maths is not re-derived. The area caps (500 per axis, 100000 cells), `mayInteract` and the
+/// `RenderBlock`/`RELOCATION_NOT_SUPPORTED` clauses are recorded, not faked.
+#[must_use]
+pub fn cut_plan(world: &mut impl DestroyWorld, clicked: [i32; 3], range: u32) -> Vec<[i32; 3]> {
+    layer_plan(world, clicked, range, destroyable)
+}
+
+/// The action bar line after a Cut collection: the count and the honest hold (nothing is
+/// cut, so 0 cells are placed and 0 removed).
+#[must_use]
+pub fn cut_reply(count: usize) -> String {
+    let cells = if count == 1 { "cell" } else { "cells" };
+    format!(
+        "Cut Paste Gadget: cut {count} {cells}, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})"
+    )
+}
+
+/// The `/buildinggadgets2` status line while the Cut/Paste gadget is held.
+#[must_use]
+pub fn cut_status_reply(range: u32, planned: Option<usize>) -> String {
+    format!(
+        "Cut Paste Gadget: range {range}, cut {} cells, 0 placed, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
         planned.unwrap_or(0)
     )
 }
@@ -2272,6 +2305,87 @@ mod tests {
         assert_eq!(
             copy_status_reply(5, None),
             "Copy Paste Gadget: range 5, copied 0 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    // --- Slice 0.2.10: the Cut/Paste gadget's collection plan ------------------------
+
+    #[test]
+    fn the_cut_gadget_id_is_the_jars_item_id() {
+        assert_eq!(CUT_GADGET, "buildinggadgets2:gadget_cut_paste");
+    }
+
+    #[test]
+    fn cut_plan_excludes_the_tag_member_and_the_unbreakable_block() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::tagged());
+        grid.cells.insert([2, 150, 0], CellFacts::bedrock());
+        grid.cells.insert([-1, 150, 0], CellFacts::stone());
+        grid.cells.insert([-2, 150, 0], CellFacts::stone());
+        let cells = cut_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[-2, 150, 0], [-1, 150, 0], [0, 150, 0]],
+            "the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept"
+        );
+    }
+
+    #[test]
+    fn cut_plan_with_ordinary_stones_includes_both() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::stone());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = cut_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [1, 150, 0], [2, 150, 0]],
+            "the same rig with two ordinary stones includes both"
+        );
+    }
+
+    #[test]
+    fn cut_plan_skips_air() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::air());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = cut_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [2, 150, 0]],
+            "air is not a collected destination"
+        );
+    }
+
+    #[test]
+    fn cut_reply_names_the_count_and_the_hold() {
+        assert_eq!(
+            cut_reply(3),
+            "Cut Paste Gadget: cut 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            cut_reply(1),
+            "Cut Paste Gadget: cut 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+    }
+
+    #[test]
+    fn cut_status_reply_names_the_range_and_the_plan() {
+        assert_eq!(
+            cut_status_reply(5, Some(3)),
+            "Cut Paste Gadget: range 5, cut 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            cut_status_reply(5, None),
+            "Cut Paste Gadget: range 5, cut 0 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
         );
     }
 }

@@ -1861,7 +1861,7 @@ was rebuilt from this tree after the docs were written (`Compiling buildinggadge
 > (`blocked: no-cancellable-placement`) and the preview stays
 > `blocked(no-client-held-stack-components)`.
 
-## Next slice
+## Next slice (superseded by Slice 8 and Slice 9 below)
 
 **Family:** the coarse `paste/rotate/cut gadgets` line, which is the last item of the
 coverage row this slice edited and the only remaining tool family in the jar that does
@@ -2063,3 +2063,218 @@ test are the bytes delivered.
 > the click and 3 with two ordinary stones there; nothing is pasted. The build, the
 > swap and the real paste stay held (`blocked: no-cancellable-placement`) and the
 > preview stays `blocked(no-client-held-stack-components)`.
+
+## Slice 9 — the Cut/Paste gadget's collection plan (2026-11-24, version 0.2.10)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Coverage — every family in the jar (0.2.9)`:
+*`rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices`*.
+Class content, tier deep. `GadgetCutPaste`'s Cut-mode collection is the same pure
+plan shape as 0.2.7/0.2.8/0.2.9, so a **plan + readout** lands with no renderer, entity
+system, anchor or wheel screen. `removeTickHandler`, `BuildingUtils.build`/`exchange`
+and every write hook stay untouched; the 0.2.4 hold is intact.
+
+### The collection path as read from the jar and the same `1.21.1` clone (`11cd2efb`)
+
+- `common/items/GadgetCutPaste.java`: `onAction` — in *cut* mode it sets the copy start
+  pos; in *paste* mode it reads the stored list and calls
+  `BuildingUtils.buildWithTileData` (the held write). `onShiftAction` sets the copy end
+  pos. `cutAndStore` walks the AABB between the two corners (caps 500 per axis,
+  100000 cells), asks `mayInteract` + `BreakEvent` per cell, and writes `AIR` for a
+  skipped cell. `customCutValidation` also refuses `Tags.Blocks.RELOCATION_NOT_SUPPORTED`.
+- `common/events/ServerTickHandler.java:444-…` `cut`: a cell is kept when
+  `GadgetUtils.isValidBlockState(state) && customCutValidation(...)`; the actual removal
+  (`level.setBlock(pos, AIR, 48)` + `RenderBlock`) is the held write.
+- `util/GadgetUtils.java:49-53` `isValidBlockState`: `!BG2DENY &&
+  getDestroySpeed >= 0 && (fluid empty || source)`.
+- `util/modes/Cut.java` `collectWorld` is a **NoOp** — the collection lives in
+  `cutAndStore`/`ServerTickHandler.cut`, not in the mode class.
+
+**Id from the artefact.** The jar ships `buildinggadgets2:gadget_cut_paste` (item model,
+recipe result, lang `item.buildinggadgets2.gadget_cut_paste` = "Cut Paste Gadget",
+16×16 texture 3,134 B sha256
+`3bf05d95ee69e5c631afb688b93ac2edfbf2f14d3509c115a5910a8aec55a857`); `GadgetCutPaste`
+is the Java class. The plan declares the jar's id. Its recipe is the jar's
+`iri / srs / ili` with `c:` tags resolved to concrete items and `minecraft:shears` for
+`s`, as the other four recipes are.
+
+| Rule | Pin query | Verdict |
+|---|---|---|
+| air | `BlockMetadata::name(state.block())` -> `minecraft:{air,cave_air,void_air}` | **carried** |
+| `destroy_speed < 0` | `BlockStates::destroy_speed` (bedrock −1 in 26.3) | **carried** |
+| deny-tag member | `Host::block_in_tag(block, "buildinggadgets2:deny")` (merged tag) | **carried** |
+| `RenderBlock` | no stamped block-class surface at `0a875da` | **`blocked(no-render-block-surface)`** — unchanged |
+
+The three queryable clauses are exactly the destruction planner's predicate, so
+`cut_plan` reuses `layer_plan` and `destroyable` verbatim. The fluid, block-entity,
+`RELOCATION_NOT_SUPPORTED`, area-cap and real cut/paste-write clauses are recorded,
+not faked.
+
+### What shipped
+
+1. **`runtime`:** `CUT_GADGET = "buildinggadgets2:gadget_cut_paste"`, `cut_plan`,
+   `cut_reply`, `cut_status_reply` — all three replies keep the hold explicit
+   (`0 placed, 0 removed (blocked: no-cancellable-placement)`).
+2. **`support`:** `GadgetState.cut_plan` travels in the same component under the
+   `cut_plan` key; an item-scoped `CutGadget` Part collects on a sneak click and writes
+   nothing on a plain click; `/buildinggadgets2` names that stack's collected count;
+   the range command and wheel accept the fifth gadget; all earlier replies unchanged.
+3. **Content:** `gadget_cut_paste` item definition, the jar's model/texture (byte-identical),
+   the concrete-id recipe, its advancement, lang name and creative-tab entry; a new
+   `tools/craft_cut.py` real-table craft leg with a missing-lapis control.
+
+### Red → green (verbatim)
+
+Six new tests were run first against stubs (`cut_plan -> Vec::new()`, both replies `""`)
+from `ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.10-cut.log`
+(`EXIT:101`), **66 passed, 5 failed** (the id test is data and passed):
+
+```
+---- runtime::tests::cut_plan_excludes_the_tag_member_and_the_unbreakable_block stdout ----
+thread 'runtime::tests::cut_plan_excludes_the_tag_member_and_the_unbreakable_block' (214521) panicked at src/runtime.rs:2330:9:
+assertion `left == right` failed: the deny-tag piston head and the -1-speed bedrock are excluded, three stones kept
+  left: []
+ right: [[-2, 150, 0], [-1, 150, 0], [0, 150, 0]]
+```
+
+Green: **71 passed, 0 failed** (`sdk-test.log`). The new tests are
+`the_cut_gadget_id_is_the_jars_item_id`,
+`cut_plan_excludes_the_tag_member_and_the_unbreakable_block`,
+`cut_plan_with_ordinary_stones_includes_both`, `cut_plan_skips_air`,
+`cut_reply_names_the_count_and_the_hold` and `cut_status_reply_names_the_range_and_the_plan`.
+
+### In game (fail-capable, on the delivered bytes)
+
+Two phases in `tools/e2e.sh`, the same rig as the destruction/exchange/copy pairs; the
+whole y=150 layer is cleared first, a stone sits at (0,150,0) and the two cells
+(1,150,0)/(2,150,0) are read back before the click. Quoted from
+`ports/_shared/evidence/buildinggadgets2-e2e/e2e-cut.log`:
+
+```
+== cut phase cut_refusals: two cells beside the clicked stone, 1 collected ==
+  cells (1,150,0) and (2,150,0): minecraft:piston_head, minecraft:bedrock
+  plan reply: Cut Paste Gadget: cut 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Cut Paste Gadget: range 5, cut 1 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+== cut phase cut_control: two cells beside the clicked stone, 3 collected ==
+  cells (1,150,0) and (2,150,0): minecraft:stone, minecraft:stone
+  plan reply: Cut Paste Gadget: cut 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+  status: Cut Paste Gadget: range 5, cut 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)
+```
+
+The pair is the proof: a read that always refuses the tag/speed reports 3 in the
+first rig, one that always accepts them reports 1 in the control rig. `SELFTEST=1`
+swaps both expectations (1→3 and 3→1) and **all 24 phases reject** (40 assertions,
+`FAIL` + `EXIT:1`, `e2e-cut-selftest.log`); both cut phases reject. The control game
+without the package refuses the gadget id (`EXIT:1`, `e2e-cut-control.log`). The carried
+cut recipe is crafted with all ingredients consumed (iron×4, redstone×2, shears×2,
+lapis×1) and a lapis-free control matches nothing. The 0.2.7/0.2.8/0.2.9 plan phases
+stay green in the same leg.
+
+### The defect found while adding the leg (fixed, not reproduced)
+
+The first cut recipe craft produced no result because `minecraft:shears` (max stack 1)
+was given as one count-2 stack and `craft_cut.py`'s old `place()` picked it up once,
+so only one of the two `s` cells was filled. `place()` now re-finds a fresh stack for
+every target and shears are given as two one-item stacks. This is a harness defect of
+this slice (the other recipes' ingredients are stackable), proved by the red leg and
+the green craft, not a Java-mod defect.
+
+### Coverage — every family in the jar (0.2.10)
+
+Replaces the 0.2.9 table; unchanged rows keep their verdicts.
+
+| Family | Status |
+|---|---|
+| the eight building modes, place-on-top, borders, per-cell gate | tested — phases as in 0.2.9, 0 written, 0 spent |
+| `cleanBlockState` — denied/kept properties, `age` instances | tested — `clean_selection`, `clean_transient` and the six unit tests |
+| `buildinggadgets2:deny` — selection and build destination | tested — `deny_selection`, `deny_destination_control` (8), `deny_destination` (6) |
+| the building gadget's status readout | tested — names the cleaned state string |
+| carried building recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried destruction recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried exchange recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| carried Copy/Paste recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| destruction destination — air / speed / deny tag / `RenderBlock` | tested (three queries) / `blocked(no-render-block-surface)` |
+| destruction plan readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| exchange destination — air / speed / deny tag / `RenderBlock` | tested (three queries) / `blocked(no-render-block-surface)` |
+| exchange plan readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| Copy/Paste destination + collection readout + gadget id | tested — 1↔3 pair, both replies, control refuses the id |
+| **carried Cut/Paste recipe** | tested — crafted with iron×4/redstone×2/shears×2/lapis×1 consumed, missing-lapis control empty |
+| **Cut destination — air** | unit tested — `cut_plan_skips_air` |
+| **Cut destination — `destroy_speed < 0`** | tested — phase `cut_refusals` (`minecraft:bedrock` excluded) |
+| **Cut destination — deny tag** | tested — phase `cut_refusals` (`minecraft:piston_head` excluded), control includes two stones |
+| **Cut destination — `RenderBlock` / fluid / block entity / `RELOCATION_NOT_SUPPORTED`** | `blocked(no-render-block-surface)` for the block-class line; the other Java clauses are not ported in this plan-only slice |
+| **Cut collection readout + gadget id** | tested — parsed action bar and status counts in both rigs; `SELFTEST` inverts both; id resolved packaged, refused in control |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| the Cut removal / Paste write, undo, energy and the mode/range screens | not ported — plan-only slices; `removeTickHandler`/`build`/`exchange` are not called |
+| rotate gadget, anchor, GUI, wheel screen | not ported — later slices |
+| preview | `blocked(no-client-held-stack-components)` — unchanged |
+
+### Gaps (0.2.10)
+
+The 0.2.9 list holds with one closure: the Cut-mode destination collection is carried
+(with its `RenderBlock` line `blocked(no-render-block-surface)`); the real Cut removal,
+the Paste write and their block-entity data copy, the undo list, energy and the range
+screen are not. The build stays held (`blocked: no-cancellable-placement`), the preview
+stays `blocked(no-client-held-stack-components)`, and the rotate gadget is unchanged.
+
+### Verification (0.2.10)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **71 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.10-cut.log`, 66/5, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 (`sdk-clippy.log`, `sdk-fmt.log`) |
+| `cargo horizon-mod build` twice from the final tree, `rm -f Cargo.lock` before each | **76,741 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.10 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` / `fits --build 0b14f8a…` | `made for` / `fits` (`sdk-fits.log`, `sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1, `package matches the tree`, R9 green |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` after removing the stale `native-*` tag `native-0a875da-9a9939180a36` (`launcher-build-0.2.10.log`), new tag `native-0a875da-eee16adcac18` |
+| e2e (modded, 24 phases, five recipes) | `PASS` + `EXIT:0` (`e2e-cut.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the destruction gadget id … is unknown` + `EXIT:1` (`e2e-cut-control.log`) |
+| e2e (`SELFTEST=1`) | all 24 phases rejected the inverted expectations (40 assertions), `FAIL` + `EXIT:1`; both cut phases swap 1↔3 (`e2e-cut-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | **22/22** — the 19 earlier legs stay green |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **76,741 B**, sha256
+`3d32d37baf5e50e39475485474c29fe3a3e79b62fc9a267a3f1adaa8ac186a5a`, **43 entries**
+(the six new Cut/Paste files included: item, model, texture, data item, recipe,
+advancement), no packed `Cargo.lock`; declared version **0.2.10**; `src/runtime.rs`
+sha256 `1df063ae25ff…` in the tree and in the archive. The game leg was rebuilt from
+this tree after the docs were written (`Compiling buildinggadgets2 (1 of 1)`), so the
+bytes under test are the bytes delivered. The forwarded slot runner restores stale
+`evidence/buildinggadgets2/*.log` files on pull; every ladder log above was re-copied
+from its fresh capture after the last forwarded step, and the gate re-read them at
+71 passed / 0 warnings.
+
+### Changelog (0.2.10)
+
+> **Building Gadgets 2 0.2.10** — the Cut/Paste gadget is carried under the jar's item
+> id `buildinggadgets2:gadget_cut_paste` (`GadgetCutPaste` is only the Java class): its
+> item, recipe, the jar's model/texture and a sneak-click Cut-mode destination
+> collection on the same one-layer rule as the destruction, exchange and Copy/Paste
+> gadgets. The collection refuses air, an unbreakable block (`destroy_speed < 0`) and a
+> `buildinggadgets2:deny` member with the three stamped queries; upstream's `RenderBlock`
+> clause is `blocked(no-render-block-surface)` and the fluid/block-entity/
+> `RELOCATION_NOT_SUPPORTED` clauses need surfaces/settings this pin does not stamp.
+> The collected cells are stored on the stack and `/buildinggadgets2` names their count
+> with 0 placed and 0 removed. The parsed in-game pair is 1 collected cell with a
+> deny-tag piston head and a bedrock beside the click and 3 with two ordinary stones
+> there; nothing is cut or pasted. The build, the swap, the real Cut removal and the
+> paste stay held (`blocked: no-cancellable-placement`) and the preview stays
+> `blocked(no-client-held-stack-components)`.
+
+## Next slice
+
+**Family:** the rotate gadget, the last item of the same gap line
+*`rotate/cut gadgets, anchor, GUI, wheel screen | not ported — later slices`*
+(`### Coverage — every family in the jar (0.2.10)`). **Tier fit:** `deep`/content —
+upstream's `RotatePayload`/`PacketRotate` is a pure transform of a stored cell list
+(the same plan shape 0.2.7–0.2.10 landed), so a rotation **readout** can be carried
+without the paste write, the render block or the GUI. Check the jar first: the class
+is `GadgetCopyPaste` with a rotate *setting*, not a separate item id — if there is no
+distinct rotate item, report that gap line as exhausted rather than inventing one.
+**In-game assertion:** with a Cut/Paste (or Copy/Paste) gadget holding a collected
+plan, issue the rotate command/click and assert the parsed `/buildinggadgets2` readout
+names the rotated cell count (e.g. 1↔3 for the two rigs above) with `0 placed, 0
+removed`, and `SELFTEST=1` inverts it.

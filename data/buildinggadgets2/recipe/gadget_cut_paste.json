@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "group": "buildinggadgets2",
+  "pattern": [
+    "iri",
+    "srs",
+    "ili"
+  ],
+  "key": {
+    "i": "minecraft:iron_ingot",
+    "r": "minecraft:redstone",
+    "l": "minecraft:lapis_lazuli",
+    "s": "minecraft:shears"
+  },
+  "result": {
+    "id": "buildinggadgets2:gadget_cut_paste",
+    "count": 1
+  }
+}

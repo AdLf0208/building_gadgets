@@ -48,6 +48,10 @@ impl Hooks for Mod {
         // click. The jar's id is `gadget_copy_paste` (the Java class is `GadgetCopyPaste`).
         let copy = registrar.item_key(runtime::COPY_GADGET);
         registrar.item_part(copy, support::CopyGadget);
+        // Slice 0.2.10: the Cut/Paste gadget collects a Cut-mode destination plan on a
+        // sneak click. The jar's id is `gadget_cut_paste` (the Java class is `GadgetCutPaste`).
+        let cut = registrar.item_key(runtime::CUT_GADGET);
+        registrar.item_part(cut, support::CutGadget);
     }
 
     /// Declare the component that holds the gadget's range and selection, before

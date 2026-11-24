@@ -1,6 +1,35 @@
 # Validation
 
-## 0.2.9 (the current package)
+## 0.2.10 (the current package)
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 9 carries the Cut/Paste gadget
+under the jar's `gadget_cut_paste` id (`GadgetCutPaste` is the Java class): its item,
+recipe and a sneak-click Cut-mode destination collection on the same one-layer rule
+as 0.2.7/0.2.8/0.2.9. The Cut removal and Paste write stay held
+(`blocked: no-cancellable-placement`); `RenderBlock` stays
+`blocked(no-render-block-surface)`. Full narrative, red/green quotes and the transcript
+in [`notes.md`](notes.md) → `## Slice 9`.
+
+| Check | Result |
+|---|---|
+| `cargo test` | 71 passed, 0 failed (red first: 66 passed / 5 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice from the final tree (`rm -f Cargo.lock` each) | 76,741 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | 0.2.10 `native-mod` / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` / `check-recipe-types.py buildinggadgets2` | 1/1 (`package matches the tree`, R9 green) / `ok` |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` (stale `native-*` tag removed first) |
+| `tools/e2e.sh` (24 phases, five recipes) | `PASS` + `EXIT:0` |
+| `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL` (unknown gadget id) + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 24 phases reject the inverted counts (40 assertions) + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 22/22 (the 19 prior legs stay green) |
+
+Artifact: `buildinggadgets2.hmod` 76,741 B, sha256
+`3d32d37baf5e50e39475485474c29fe3a3e79b62fc9a267a3f1adaa8ac186a5a`, 43 entries, no packed
+`Cargo.lock`; declared version 0.2.10. Details in [`notes.md`](notes.md) → `## Slice 9` →
+`**Package.**`.
+
+## 0.2.9 (previous)
 
 Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 8 carries the Copy/Paste gadget

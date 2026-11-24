@@ -1,6 +1,6 @@
 id = "buildinggadgets2"
 name = "Building Gadgets 2"
-version = "0.2.9"
+version = "0.2.10"
 description = """A port of Building Gadgets 2 for Horizon. The building gadget's item, recipe, selection
 (sneak + right click stores the clicked block's state in the item's buildinggadgets2:gadget_state
 component) and all eight modes (build-to-me, vertical wall, vertical column, surface, horizontal
@@ -24,14 +24,19 @@ the jar's item id `gadget_copy_paste` (`GadgetCopyPaste` is only the Java class)
 recipe and a sneak-click Copy-mode destination collection on the same one-layer rule, refusing
 air, an unbreakable block and a deny-tag member with the three stamped queries. Upstream's
 RenderBlock clause is recorded `blocked(no-render-block-surface)`; the collected count is named
-by /buildinggadgets2 with 0 placed and 0 removed. The build, the swap and the paste itself are
-HELD: the SDK has no placement call that names the acting player and lets a protection
-mod cancel one position, so a click writes no block and spends no item, and says so on the action
-bar with the symbol `blocked: no-cancellable-placement`. Every destination also passes the
-player's own placement gate (build permission, mayUseItemAt, the world border with its exclusive
-upper edges, and a dedicated server's spawn protection). The anchor, undo, energy, the block
-removal the destruction plan precedes, the real paste with its block-entity data copy, the rotate
-and cut gadgets and their screens are not ported yet."""
+by /buildinggadgets2 with 0 placed and 0 removed. The Cut/Paste gadget is also carried under
+the jar's item id `gadget_cut_paste` (`GadgetCutPaste` is only the Java class): its item, recipe,
+model/texture, advancement and a sneak-click Cut-mode destination collection on the same
+one-layer rule, refusing air, an unbreakable block and a `buildinggadgets2:deny` member with the
+three stamped queries; upstream's RenderBlock clause is recorded `blocked(no-render-block-surface)`
+and the collected count is named by /buildinggadgets2 with 0 placed and 0 removed. The build,
+the swap, the real cut removal and the paste itself are HELD: the SDK has no placement call that
+names the acting player and lets a protection mod cancel one position, so a click writes no block
+and spends no item, and says so on the action bar with the symbol `blocked: no-cancellable-placement`.
+Every destination also passes the player's own placement gate (build permission, mayUseItemAt,
+the world border with its exclusive upper edges, and a dedicated server's spawn protection). The
+anchor, undo, energy, the block removal the destruction plan precedes, the real paste with its
+block-entity data copy, the rotate gadget and the screens are not ported yet."""
 authors = ["Direwolf20-MC", "AdLf0208"]
 # Licence of the original (MIT, Direwolf20-MC/BuildingGadgets2); the text and the
 # original copyright notice travel inside the package as LICENSE / LICENSE-NOTICE.md.

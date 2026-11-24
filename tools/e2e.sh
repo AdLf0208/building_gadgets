@@ -70,6 +70,17 @@
 #   count with `0 placed, 0 removed` (Paste's real write stays held); `SELFTEST` swaps
 #   1<->3 in both directions. No block is placed, removed or swapped.
 #
+# Two Cut/Paste-gadget phases close the rest of the coarse gap line (0.2.10):
+#
+#   * `cut_refusals` — a sneak click beside the clicked stone collects only the stone:
+#     a `minecraft:piston_head` (deny tag member) and `minecraft:bedrock` (−1 destroy
+#     speed) in the layer are excluded (upstream writes AIR for those positions);
+#   * `cut_control` — two ordinary stones there collect all three.
+#
+#   The action bar and the parsed `/buildinggadgets2` status both name the collected
+#   count with `0 placed, 0 removed` (the Cut removal and Paste write stay held);
+#   `SELFTEST` swaps 1<->3 in both directions. No block is placed, removed or swapped.
+#
 #   GAME=<launcher-built horizon-client> tools/e2e.sh
 #   GAME=$CONTROL_GAME tools/e2e.sh          # same Nightly, no package: the gadget
 #                                            # id is unknown -> FAIL, EXIT:1
@@ -103,7 +114,9 @@ EXCHANGE_TOOL=buildinggadgets2:gadget_exchanging
 # Slice 0.2.9: the jar ships `gadget_copy_paste` (`GadgetCopyPaste` is the Java class;
 # the brief's `gadget_paste` is an id no file in the jar carries).
 COPY_TOOL=buildinggadgets2:gadget_copy_paste
-PHASES=22
+# Slice 0.2.10: the jar ships `gadget_cut_paste` (`GadgetCutPaste` is the Java class).
+CUT_TOOL=buildinggadgets2:gadget_cut_paste
+PHASES=24
 HELD="Building Gadget: held (blocked: no-cancellable-placement)"
 # A carried `buildinggadgets2:deny` member whose other selection clauses all pass, so only the
 # tag can refuse it: destroy speed 1.5 (> 0), no fluid, block item air.
@@ -835,6 +848,82 @@ copy_phase() {
 }
 
 
+# The Cut/Paste gadget's Cut-mode collection (`GadgetCutPaste.cutAndStore`'s valid cells,
+# restricted to the three stamped queries). The same rig as the destruction/exchange/copy
+# pairs: a deny-tag member and an unbreakable block beside the click are excluded, two
+# ordinary stones are included. Both the click's action bar and the parsed
+# `/buildinggadgets2` reply are asserted, with the 0 placed / 0 removed hold.
+cut_phase() {
+    local name=$1 want=$2
+    local reply cell_a cell_b plan_want status_want held
+    local material_a=minecraft:piston_head material_b=minecraft:bedrock
+
+    echo "== cut phase $name: two cells beside the clicked stone, $want collected =="
+    PHASE_REJECTED=0
+    reset_stage
+    # Clear the whole y=150 layer so a previous phase's block cannot leak into the count.
+    ctl fill -8 150 -8 8 150 8 minecraft:air >/dev/null
+    ctl fill 0 150 0 0 150 0 minecraft:stone >/dev/null
+    if [ "$name" = "cut_control" ]; then
+        material_a=minecraft:stone
+        material_b=minecraft:stone
+    fi
+    ctl setblock 1 150 0 "$material_a" >/dev/null
+    ctl setblock 2 150 0 "$material_b" >/dev/null
+    ctl wait 3
+    cell_a=$(block_at 1 150 0)
+    cell_b=$(block_at 2 150 0)
+    echo "  cells (1,150,0) and (2,150,0): $cell_a, $cell_b"
+    [ "$cell_a" = "$material_a" ] && [ "$cell_b" = "$material_b" ] \
+        || phase_fail "$name: the rig cells are '$cell_a' and '$cell_b', expected $material_a and $material_b"
+
+    ctl command "clear @s" >/dev/null
+    ctl wait 2
+    ctl give "$CUT_TOOL" 1 >/dev/null || fail "the package did not provide $CUT_TOOL"
+    ctl wait 2
+    ctl select "$CUT_TOOL" >/dev/null || fail "cannot select $CUT_TOOL"
+    ctl wait 2
+    held=$(ctl inventory | jq -r '.held.item // "none"')
+    [ "$held" = "$CUT_TOOL" ] \
+        || phase_fail "$name: the held item is $held, expected $CUT_TOOL"
+
+    # The range lives on the cut gadget's own component, so set it while it is held.
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+
+    select_at 0 150 0 south
+    reply=$(actionbar)
+    echo "  plan reply: $reply"
+    plan_want="Cut Paste Gadget: cut $want cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+    if [ "$want" -eq 1 ]; then
+        plan_want="Cut Paste Gadget: cut 1 cell, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+    fi
+    [ "$reply" = "$plan_want" ] \
+        || phase_fail "$name: the plan reply was '$reply', expected '$plan_want'"
+
+    reply=$(command_reply "/buildinggadgets2")
+    echo "  status: $reply"
+    status_want="Cut Paste Gadget: range 5, cut $want cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+    if [ "$SELFTEST" = 1 ]; then
+        # Invert the count in both directions: the refused rig claims 3, the control rig 1.
+        if [ "$name" = "cut_control" ]; then
+            status_want="Cut Paste Gadget: range 5, cut 1 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        else
+            status_want="Cut Paste Gadget: range 5, cut 3 cells, 0 placed, 0 removed (blocked: no-cancellable-placement)"
+        fi
+    fi
+    [ "$reply" = "$status_want" ] \
+        || phase_fail "$name: the status reply was '$reply', expected '$status_want'"
+
+    # The plan is a plan only: neither rig lost a block and nothing was placed.
+    cell_a=$(block_at 1 150 0)
+    cell_b=$(block_at 2 150 0)
+    [ "$cell_a" = "$material_a" ] && [ "$cell_b" = "$material_b" ] \
+        || phase_fail "$name: the plan changed a block ($cell_a, $cell_b)"
+}
+
+
 echo "== launch (survival world $WORLD; the package is installed in the instance) =="
 launch "$WORLD"
 ctl wait-ready 120
@@ -895,6 +984,21 @@ else
     fail "the copy/paste gadget id $COPY_TOOL is unknown (control game without the package)"
 fi
 
+echo "== the cut/paste gadget id resolves only with the package =="
+if ctl give "$CUT_TOOL" 1 >/dev/null 2>&1; then
+    ctl wait 2
+    got=$(ctl inventory | jq -r '[.counts["'"$CUT_TOOL"'"] // 0] | add')
+    if [ "$got" -ge 1 ]; then
+        echo "  $CUT_TOOL resolved (packaged game), count $got"
+    else
+        fail "the cut/paste gadget id $CUT_TOOL was not added to the inventory"
+    fi
+    ctl command "clear @s" >/dev/null
+    ctl wait 2
+else
+    fail "the cut/paste gadget id $CUT_TOOL is unknown (control game without the package)"
+fi
+
 echo "== the carried gadget recipe crafts in a real crafting table =="
 ctl setblock 3 150 4 minecraft:crafting_table
 ctl wait 2
@@ -918,6 +1022,12 @@ ctl setblock 3 150 4 minecraft:crafting_table
 ctl wait 2
 python3 "$PORT/tools/craft_copy.py" "$SOCK" "$CTL" 3 150 4 \
     || fail "the carried copy/paste gadget recipe did not craft (or its control matched)"
+
+echo "== the carried cut/paste gadget recipe crafts in a real crafting table =="
+ctl setblock 3 150 4 minecraft:crafting_table
+ctl wait 2
+python3 "$PORT/tools/craft_cut.py" "$SOCK" "$CTL" 3 150 4 \
+    || fail "the carried cut/paste gadget recipe did not craft (or its control matched)"
 ctl command "clear @s"
 ctl wait 2
 ctl tp 0 150 4
@@ -989,6 +1099,11 @@ exchange_phase exchange_control 3
 copy_phase copy_refusals 1
 copy_phase copy_control 3
 
+# The Cut/Paste gadget's Cut-mode collection: the same rig, with the deny-tag member
+# and the unbreakable block excluded and two ordinary stones included.
+cut_phase cut_refusals 1
+cut_phase cut_control 3
+
 
 if [ "$SELFTEST" = 1 ]; then
     [ "$REJECTED_PHASES" -ge "$PHASES" ] \
@@ -997,4 +1112,4 @@ if [ "$SELFTEST" = 1 ]; then
     exit 1
 fi
 
-echo "PASS: all four carried recipes crafted one gadget each with their ingredients consumed (a missing lapis matched nothing in each); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag; the selection stored upstream's cleaned state: a lit furnace kept facing=west and dropped lit=true, and a ripe wheat was stored as age=0; and the destruction gadget's parsed status named 1 planned cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, 0 removed in both, with the RenderBlock line recorded blocked(no-render-block-surface); the exchange gadget's action bar and parsed status named the same 1-with-refusals / 3-with-stones pair with 0 placed and 0 removed; and the copy/paste gadget (the jar's gadget_copy_paste id) collected 1 cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, both replies showing 0 placed and 0 removed"
+echo "PASS: all five carried recipes crafted one gadget each with their ingredients consumed (a missing lapis matched nothing in each); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag; the selection stored upstream's cleaned state: a lit furnace kept facing=west and dropped lit=true, and a ripe wheat was stored as age=0; the destruction gadget's parsed status named 1 planned cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, 0 removed in both, with the RenderBlock line recorded blocked(no-render-block-surface); the exchange gadget's action bar and parsed status named the same 1-with-refusals / 3-with-stones pair with 0 placed and 0 removed; the copy/paste gadget (the jar's gadget_copy_paste id) collected 1 cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, both replies showing 0 placed and 0 removed; and the cut/paste gadget (the jar's gadget_cut_paste id) collected the same 1-with-refusals / 3-with-stones pair, both replies showing 0 placed and 0 removed"

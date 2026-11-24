@@ -16,8 +16,8 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    self, COPY_GADGET, DEFAULT_RANGE, DESTROY_GADGET, DestroyFacts, DestroyWorld, EXCHANGE_GADGET,
-    GadgetCommand, MAX_RANGE, Mode, PlayerView,
+    self, COPY_GADGET, CUT_GADGET, DEFAULT_RANGE, DESTROY_GADGET, DestroyFacts, DestroyWorld,
+    EXCHANGE_GADGET, GadgetCommand, MAX_RANGE, Mode, PlayerView,
 };
 
 /// The persisted state component, upstream's `GadgetNBT` payload on the stack.
@@ -57,6 +57,9 @@ pub struct GadgetState {
     /// Slice 0.2.9: the Copy/Paste gadget's Copy-mode collection, stored on its own
     /// stack. Paste's real write (`BuildingUtils.build`/`exchange`) stays held.
     pub copy_plan: Option<Vec<[i32; 3]>>,
+    /// Slice 0.2.10: the Cut/Paste gadget's Cut-mode collection, stored on its own stack.
+    /// The Cut and Paste writes (`removeTickHandler`, `BuildingUtils.buildWithTileData`) stay held.
+    pub cut_plan: Option<Vec<[i32; 3]>>,
 }
 
 impl Default for GadgetState {
@@ -69,6 +72,7 @@ impl Default for GadgetState {
             destroy_plan: None,
             exchange_plan: None,
             copy_plan: None,
+            cut_plan: None,
         }
     }
 }
@@ -146,6 +150,7 @@ fn read_state(stack: &ItemStack) -> GadgetState {
         destroy_plan: plan("destroy_plan"),
         exchange_plan: plan("exchange_plan"),
         copy_plan: plan("copy_plan"),
+        cut_plan: plan("cut_plan"),
     }
 }
 
@@ -183,6 +188,9 @@ fn write_state(stack: &mut ItemStack, state: &GadgetState) {
     if let Some(plan) = &state.copy_plan {
         entries.push(("copy_plan", rows(plan)));
     }
+    if let Some(plan) = &state.cut_plan {
+        entries.push(("cut_plan", rows(plan)));
+    }
     let _ = stack.set(&GadgetStateComponent, Tag::compound(entries));
 }
 
@@ -204,8 +212,8 @@ fn held_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemSta
     held_stack(host, player).filter(|(_, stack)| stack.item().id(host) == runtime::GADGET)
 }
 
-/// Any of the four gadgets, for the shared range/command paths. The destruction,
-/// exchange and Copy/Paste gadgets carry the same `gadget_state` component as the
+/// Any of the five gadgets, for the shared range/command paths. The destruction,
+/// exchange, Copy/Paste and Cut/Paste gadgets carry the same `gadget_state` component as the
 /// building gadget, so `/buildinggadgets2 range` and the wheel step work with either held.
 fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
     held_stack(host, player).filter(|(_, stack)| {
@@ -214,6 +222,7 @@ fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, Ite
             || id == DESTROY_GADGET
             || id == EXCHANGE_GADGET
             || id == COPY_GADGET
+            || id == CUT_GADGET
     })
 }
 
@@ -221,7 +230,7 @@ fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, Ite
 /// and the slot set back (the component write is not visible on the borrowed stack
 /// the hook is handed).
 fn write_held(host: &mut dyn ServerHost, player: PlayerRef, state: &GadgetState) -> bool {
-    // All four gadgets carry the same component: the destruction/exchange/copy plans
+    // All five gadgets carry the same component: the destruction/exchange/copy/cut plans
     // travel on their stacks exactly as the building gadget's selection and range do.
     let Some((slot, mut stack)) = held_any_gadget(host, player) else {
         return false;
@@ -573,6 +582,7 @@ fn use_on_block(
             destroy_plan: state.destroy_plan,
             exchange_plan: state.exchange_plan,
             copy_plan: state.copy_plan,
+            cut_plan: state.cut_plan,
         };
         if !write_held(host, player, &selected) {
             return None;
@@ -671,6 +681,7 @@ fn use_on_destroy(
             destroy_plan: Some(cells.clone()),
             exchange_plan: state.exchange_plan,
             copy_plan: state.copy_plan,
+            cut_plan: state.cut_plan,
         };
         if !write_held(host, player, &next) {
             return None;
@@ -749,6 +760,7 @@ fn use_on_exchange(
             destroy_plan: state.destroy_plan,
             exchange_plan: Some(cells.clone()),
             copy_plan: state.copy_plan,
+            cut_plan: state.cut_plan,
         };
         if !write_held(host, player, &next) {
             return None;
@@ -791,10 +803,7 @@ impl ItemPart for ExchangeGadget {
 /// queries) and stores the plan on the stack; a plain click writes nothing. Upstream's
 /// Paste mode hands the stored list to `BuildingUtils.build`/`exchange`, which is the
 /// held write — no block is placed, removed or swapped here.
-fn use_on_copy(
-    host: &mut dyn ServerHost,
-    event: &mut UseOnEvent<'_>,
-) -> Option<InteractionResult> {
+fn use_on_copy(host: &mut dyn ServerHost, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
     let player = host.player(event.player)?;
     if player.is_spectator(host) == Some(true) {
         return None;
@@ -828,6 +837,7 @@ fn use_on_copy(
             destroy_plan: state.destroy_plan,
             exchange_plan: state.exchange_plan,
             copy_plan: Some(cells.clone()),
+            cut_plan: state.cut_plan,
         };
         if !write_held(host, player, &next) {
             return None;
@@ -863,6 +873,84 @@ impl ItemPart for CopyGadget {
             return None;
         }
         use_on_copy(host, event)
+    }
+}
+
+/// A right click with the Cut/Paste gadget: a sneak click collects the Cut-mode
+/// destination cells (`GadgetCutPaste.cutAndStore`'s valid cells, restricted to the three
+/// stamped queries) and stores the plan on the stack; a plain click writes nothing. Upstream's
+/// Cut removal (`removeTickHandler`) and Paste write (`BuildingUtils.buildWithTileData`) are the
+/// held write — no block is placed or removed, and the block-entity data copy is not carried.
+fn use_on_cut(host: &mut dyn ServerHost, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+    let player = host.player(event.player)?;
+    if player.is_spectator(host) == Some(true) {
+        return None;
+    }
+    let level = player.level(host)?;
+    let state = read_state(event.stack);
+    if player.is_secondary_use_active(host).unwrap_or(false) {
+        // `cutAndStore` collects over an AABB between two clicked corners; this slice's
+        // one-layer plan still needs a real block under the crosshair to centre on.
+        let clicked = level.block_state(host, event.pos)?;
+        let air = host
+            .block_states()
+            .name(clicked.block())
+            .ok()
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                )
+            });
+        if air {
+            return None;
+        }
+        let mut world = LevelDestroyWorld { host, level };
+        let cells = runtime::cut_plan(&mut world, event.pos, state.range);
+        let next = GadgetState {
+            range: state.range,
+            selected: state.selected,
+            mode: state.mode,
+            place_on_top: state.place_on_top,
+            destroy_plan: state.destroy_plan,
+            exchange_plan: state.exchange_plan,
+            copy_plan: state.copy_plan,
+            cut_plan: Some(cells.clone()),
+        };
+        if !write_held(host, player, &next) {
+            return None;
+        }
+        let _ = player.action_bar(host, Text::literal(runtime::cut_reply(cells.len())));
+        return Some(InteractionResult::SuccessServer);
+    }
+    // The hold: neither the Cut removal nor the Paste write has a call that names the acting
+    // player and lets a protection mod veto one cell, and this slice is a plan + readout only.
+    let _ = player.action_bar(
+        host,
+        Text::literal(format!(
+            "Cut Paste Gadget: held (blocked: {}) - 0 placed, 0 removed",
+            runtime::NO_CANCELLABLE_PLACEMENT
+        )),
+    );
+    Some(InteractionResult::SuccessServer)
+}
+
+/// The Cut/Paste gadget's behaviour, attached to the jar's
+/// `buildinggadgets2:gadget_cut_paste` in `Hooks::register`. As a Part it is asked only
+/// for that item; the Java class `GadgetCutPaste` is not the shipped id.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CutGadget;
+
+#[mod_api::horizon_part]
+impl ItemPart for CutGadget {
+    fn use_on(&self, host: HostSide<'_>, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
+        if event.hand != Hand::Main {
+            return None;
+        }
+        use_on_cut(host, event)
     }
 }
 
@@ -957,8 +1045,8 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
             let held = player.and_then(|player| held_any_gadget(host, player));
             let held_id = held.as_ref().map(|(_, stack)| stack.item().id(host));
             let state = held.map_or_else(GadgetState::default, |(_, stack)| read_state(&stack));
-            // The destruction, exchange and Copy/Paste gadgets' readouts name their
-            // planned cell count (0 before a plan). The building gadget's readout is
+            // The destruction, exchange, Copy/Paste and Cut/Paste gadgets' readouts name
+            // their planned cell count (0 before a plan). The building gadget's readout is
             // the state string the component holds, so the cleaned selection stays observable.
             let line = match held_id.as_deref() {
                 Some(id) if id == DESTROY_GADGET => runtime::destroy_status_reply(
@@ -969,10 +1057,12 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                     state.range,
                     state.exchange_plan.as_ref().map(Vec::len),
                 ),
-                Some(id) if id == COPY_GADGET => runtime::copy_status_reply(
-                    state.range,
-                    state.copy_plan.as_ref().map(Vec::len),
-                ),
+                Some(id) if id == COPY_GADGET => {
+                    runtime::copy_status_reply(state.range, state.copy_plan.as_ref().map(Vec::len))
+                }
+                Some(id) if id == CUT_GADGET => {
+                    runtime::cut_status_reply(state.range, state.cut_plan.as_ref().map(Vec::len))
+                }
                 _ => runtime::status_reply(
                     state.mode,
                     state.range,
@@ -1004,6 +1094,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 destroy_plan: current.destroy_plan,
                 exchange_plan: current.exchange_plan,
                 copy_plan: current.copy_plan,
+                cut_plan: current.cut_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_range_reply(value));
@@ -1034,6 +1125,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 destroy_plan: current.destroy_plan,
                 exchange_plan: current.exchange_plan,
                 copy_plan: current.copy_plan,
+                cut_plan: current.cut_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_mode_reply(mode));
@@ -1064,6 +1156,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 destroy_plan: current.destroy_plan,
                 exchange_plan: current.exchange_plan,
                 copy_plan: current.copy_plan,
+                cut_plan: current.cut_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_place_on_top_reply(enabled));
@@ -1108,7 +1201,12 @@ pub fn scroll(host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flo
         return Flow::Continue;
     };
     let id = stack.item().id(host);
-    if id != runtime::GADGET && id != DESTROY_GADGET && id != EXCHANGE_GADGET && id != COPY_GADGET {
+    if id != runtime::GADGET
+        && id != DESTROY_GADGET
+        && id != EXCHANGE_GADGET
+        && id != COPY_GADGET
+        && id != CUT_GADGET
+    {
         return Flow::Continue;
     }
     let state = read_state(&stack);

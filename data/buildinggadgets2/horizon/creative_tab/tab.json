@@ -5,6 +5,7 @@
     "buildinggadgets2:gadget_building",
     "buildinggadgets2:gadget_destruction",
     "buildinggadgets2:gadget_exchanging",
-    "buildinggadgets2:gadget_copy_paste"
+    "buildinggadgets2:gadget_copy_paste",
+    "buildinggadgets2:gadget_cut_paste"
   ]
 }
