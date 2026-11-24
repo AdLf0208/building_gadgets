@@ -1,7 +1,35 @@
 # Validation
 
+## 0.2.7 (the current package)
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` + horizon-mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**. Slice 6 adds the destruction gadget's
+destination plan (a plan + readout only); the build stays held
+(`blocked: no-cancellable-placement`) and `RenderBlock` is
+`blocked(no-render-block-surface)`. Full narrative and red/green quotes in
+[`notes.md`](notes.md) → `## Slice 6`.
+
+| Check | Result |
+|---|---|
+| `cargo test` | 53 passed, 0 failed (red first: 47 passed / 6 failed, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 |
+| `cargo horizon-mod build` twice (`rm -f Cargo.lock` each) | 57,068 B, `cmp` identical |
+| `cargo horizon-mod check` / `fits --build 0a875da…` / `fits --build 0b14f8a…` | 0.2.7 `native-mod` / `made for` / `fits` |
+| `verify-sdk-package.py buildinggadgets2` / `check-recipe-types.py buildinggadgets2` | 1/1 / `ok` |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` |
+| `tools/e2e.sh` (modded, both recipes + 18 phases) | `PASS` + `EXIT:0` |
+| `GAME=$CONTROL_GAME tools/e2e.sh` | `FAIL` (unknown destruction gadget id) + `EXIT:1` |
+| `SELFTEST=1 tools/e2e.sh` | all 18 phases reject the inverted counts (34 assertions) + `EXIT:1` |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | 13/13 (the 10 prior legs stay green) |
+
+Artifact: `buildinggadgets2.hmod` 57,068 B, sha256
+`a506d017e78f5e05781ad68870836e7c9d39dc044b00f4a5522ef3948146e81f`, 25 entries, no packed
+`Cargo.lock`; declared version 0.2.7. Details in [`notes.md`](notes.md) → `## Slice 6` →
+`**Package.**`.
+
 > **Historical (0.1.0, the retired `.hnmod` format).** The current package is the
-> SDK `.hmod` (**0.2.6**): its ladder, artifact and evidence are in
+> SDK `.hmod` (**0.2.7**, above); the 0.2.6 record below is the previous version.
+> Its ladder, artifact and evidence are in
 > [`notes.md`](notes.md) → `## Slice 5 — cleanBlockState on the selection`, with the logs under
 > `../_shared/evidence/buildinggadgets2/sdk-*.log` and the in-game legs under
 > `../_shared/evidence/buildinggadgets2-e2e/`.
@@ -10,7 +38,7 @@
 > deny-tag phases and the two cleaned-selection phases, not a placed row. The staged
 > `horizon.py` steps below no longer exist.
 
-## 0.2.6 (the current package)
+## 0.2.6 (previous)
 
 | Check | Result |
 |---|---|

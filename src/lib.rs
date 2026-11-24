@@ -36,6 +36,10 @@ impl Hooks for Mod {
     fn register(&self, registrar: &mut dyn Registrar, _context: &RegistrationContext) {
         let gadget = registrar.item_key(runtime::GADGET);
         registrar.item_part(gadget, support::Gadget);
+        // Slice 0.2.7: the destruction gadget plans a destination on a sneak click. Its
+        // part is scoped to that item, so the two gadgets cannot answer each other's clicks.
+        let destroy = registrar.item_key(runtime::DESTROY_GADGET);
+        registrar.item_part(destroy, support::DestroyGadget);
     }
 
     /// Declare the component that holds the gadget's range and selection, before

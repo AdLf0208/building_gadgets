@@ -15,7 +15,10 @@ use mod_api::{
     MouseScrollingEvent, PlayerRef, RunModCommandEvent, ServerHost, Tag, Text, UseOnEvent,
 };
 
-use crate::runtime::{self, DEFAULT_RANGE, GadgetCommand, MAX_RANGE, Mode, PlayerView};
+use crate::runtime::{
+    self, DEFAULT_RANGE, DESTROY_GADGET, DestroyFacts, DestroyWorld, GadgetCommand, MAX_RANGE,
+    Mode, PlayerView,
+};
 
 /// The persisted state component, upstream's `GadgetNBT` payload on the stack.
 pub const COMPONENT: &str = "buildinggadgets2:gadget_state";
@@ -45,6 +48,9 @@ pub struct GadgetState {
     pub mode: Mode,
     /// Upstream's `PLACE_ON_TOP` toggle.
     pub place_on_top: bool,
+    /// Slice 0.2.7: the cells the destruction gadget's last sneak click planned. The plan
+    /// travels with the stack so `/buildinggadgets2` can name its count; it removes nothing.
+    pub destroy_plan: Option<Vec<[i32; 3]>>,
 }
 
 impl Default for GadgetState {
@@ -54,6 +60,7 @@ impl Default for GadgetState {
             selected: None,
             mode: runtime::DEFAULT_MODE,
             place_on_top: false,
+            destroy_plan: None,
         }
     }
 }
@@ -108,11 +115,25 @@ fn read_state(stack: &ItemStack) -> GadgetState {
         })
         .unwrap_or(runtime::DEFAULT_MODE);
     let place_on_top = matches!(tag.get("place_on_top"), Some(Tag::Byte(1)));
+    let destroy_plan = tag.get("destroy_plan").and_then(|tag| match tag {
+        Tag::List(rows) => rows
+            .iter()
+            .map(|row| match row {
+                Tag::List(parts) => match parts.as_slice() {
+                    [Tag::Int(x), Tag::Int(y), Tag::Int(z)] => Some([*x, *y, *z]),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>(),
+        _ => None,
+    });
     GadgetState {
         range,
         selected,
         mode,
         place_on_top,
+        destroy_plan,
     }
 }
 
@@ -128,27 +149,55 @@ fn write_state(stack: &mut ItemStack, state: &GadgetState) {
     if let Some(selected) = &state.selected {
         entries.push(("selected", Tag::String(selected.as_str().into())));
     }
+    if let Some(plan) = &state.destroy_plan {
+        let rows = plan
+            .iter()
+            .map(|cell| {
+                Tag::List(
+                    cell.iter()
+                        .map(|value| Tag::Int(*value))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.push(("destroy_plan", Tag::List(rows)));
+    }
     let _ = stack.set(&GadgetStateComponent, Tag::compound(entries));
 }
 
 /// The main-hand gadget the player holds, with the inventory slot it is in. The
 /// selected hotbar slot is the main hand's; an off-hand gadget is not read, as the
 /// 0.1.0 port's `game.held()` was the main hand.
-fn held_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
+fn held_stack(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
     let slot = u32::try_from(player.selected_slot(host)?).ok()?;
     let stack = player
         .inventory_slots(host)?
         .into_iter()
         .find(|(at, _)| *at == slot)
         .map(|(_, stack)| stack)?;
-    (stack.item().id(host) == runtime::GADGET).then_some((slot, stack))
+    Some((slot, stack))
+}
+
+/// The main-hand building gadget, for the build path.
+fn held_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
+    held_stack(host, player).filter(|(_, stack)| stack.item().id(host) == runtime::GADGET)
+}
+
+/// Either of the two gadgets, for the shared range/command paths.
+fn held_any_gadget(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, ItemStack)> {
+    held_stack(host, player).filter(|(_, stack)| {
+        let id = stack.item().id(host);
+        id == runtime::GADGET || id == DESTROY_GADGET
+    })
 }
 
 /// Replace the held gadget's state: the stack is copied out, its component written,
 /// and the slot set back (the component write is not visible on the borrowed stack
 /// the hook is handed).
 fn write_held(host: &mut dyn ServerHost, player: PlayerRef, state: &GadgetState) -> bool {
-    let Some((slot, mut stack)) = held_gadget(host, player) else {
+    // Both gadgets carry the same component: the destruction plan travels on its stack
+    // exactly as the building gadget's selection and range do.
+    let Some((slot, mut stack)) = held_any_gadget(host, player) else {
         return false;
     };
     write_state(&mut stack, state);
@@ -182,6 +231,37 @@ fn selectable(host: &dyn ServerHost, level: LevelRef, pos: [i32; 3], state: Bloc
         facts.destroy_speed(state),
         fluid,
     )
+}
+
+/// The three queryable clauses of `isValidDestroyBlockState` at one cell. Air is answered by
+/// the block's own id (as in [`selectable`]); destroy speed and the deny tag are the stamped
+/// `Backend::block_state_destroy_speed` and `Host::block_in_tag` reads. There is no stamped
+/// `RenderBlock` query at this pin, so that fourth line is `blocked(no-render-block-surface)`
+/// and is deliberately not asked here (see `runtime::NO_RENDER_BLOCK_SURFACE`).
+fn destroy_facts(host: &dyn ServerHost, level: LevelRef, pos: [i32; 3]) -> Option<DestroyFacts> {
+    let state = level.block_state(host, pos)?;
+    let facts = host.block_states();
+    let air = matches!(
+        facts.name(state.block()).ok()?,
+        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+    );
+    Some(DestroyFacts {
+        air,
+        destroy_speed: facts.destroy_speed(state),
+        deny_tagged: host.block_in_tag(state.block(), runtime::DENY_TAG),
+    })
+}
+
+/// The planner's world view, reading the game's own tables through the server host.
+struct LevelDestroyWorld<'a> {
+    host: &'a dyn ServerHost,
+    level: LevelRef,
+}
+
+impl DestroyWorld for LevelDestroyWorld<'_> {
+    fn facts(&mut self, pos: [i32; 3]) -> Option<DestroyFacts> {
+        destroy_facts(self.host, self.level, pos)
+    }
 }
 
 /// The block's name for the selection reply: the state string resolved back to its block, so the
@@ -464,6 +544,7 @@ fn use_on_block(
             selected: Some(text),
             mode: state.mode,
             place_on_top: state.place_on_top,
+            destroy_plan: state.destroy_plan,
         };
         if !write_held(host, player, &selected) {
             return None;
@@ -520,6 +601,81 @@ fn use_on_block(
         }
     }
     Some(InteractionResult::SuccessServer)
+}
+
+/// A right click with the destruction gadget: a sneak click plans the destination cells and
+/// stores the plan on the stack; a plain click writes nothing. The plan is the deliverable — no
+/// block is removed, so the build hold stays exactly where the 0.2.4 ruling left it.
+fn use_on_destroy(
+    host: &mut dyn ServerHost,
+    event: &mut UseOnEvent<'_>,
+) -> Option<InteractionResult> {
+    let player = host.player(event.player)?;
+    if player.is_spectator(host) == Some(true) {
+        return None;
+    }
+    let level = player.level(host)?;
+    let state = read_state(event.stack);
+    if player.is_secondary_use_active(host).unwrap_or(false) {
+        // Upstream's `GadgetDestruction.onAction` passes a click on air with no anchor: the
+        // plan is centred on a real block, so an air target is not planned.
+        let clicked = level.block_state(host, event.pos)?;
+        let air = host
+            .block_states()
+            .name(clicked.block())
+            .ok()
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                )
+            });
+        if air {
+            return None;
+        }
+        let mut world = LevelDestroyWorld { host, level };
+        let cells = runtime::destroy_plan(&mut world, event.pos, state.range);
+        let next = GadgetState {
+            range: state.range,
+            selected: state.selected,
+            mode: state.mode,
+            place_on_top: state.place_on_top,
+            destroy_plan: Some(cells.clone()),
+        };
+        if !write_held(host, player, &next) {
+            return None;
+        }
+        let _ = player.action_bar(host, Text::literal(runtime::destroy_reply(cells.len())));
+        return Some(InteractionResult::SuccessServer);
+    }
+    // The hold: no removal call exists that names the acting player and lets a protection
+    // mod veto one cell, and this slice is a plan + readout only.
+    let _ = player.action_bar(
+        host,
+        Text::literal(format!(
+            "Destruction Gadget: held (blocked: {}) - 0 removed",
+            runtime::NO_CANCELLABLE_PLACEMENT
+        )),
+    );
+    Some(InteractionResult::SuccessServer)
+}
+
+/// The destruction gadget's behaviour, attached to `buildinggadgets2:gadget_destruction` in
+/// `Hooks::register`. As a Part it is asked only for that item.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DestroyGadget;
+
+#[mod_api::horizon_part]
+impl ItemPart for DestroyGadget {
+    fn use_on(&self, host: HostSide<'_>, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
+        if event.hand != Hand::Main {
+            return None;
+        }
+        use_on_destroy(host, event)
+    }
 }
 
 /// The building gadget's behaviour, attached to `buildinggadgets2:gadget_building`
@@ -610,33 +766,39 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
     };
     match parsed {
         GadgetCommand::Status => {
-            let state = player
-                .and_then(|player| held_gadget(host, player))
-                .map_or_else(GadgetState::default, |(_, stack)| read_state(&stack));
-            // The readout is the state string the component holds, so the cleaned selection
-            // (`cleanBlockState`: transient properties at the block's default) is observable.
-            let line = runtime::status_reply(
-                state.mode,
-                state.range,
-                state.selected.as_deref(),
-                state.place_on_top,
-            );
+            let held = player.and_then(|player| held_any_gadget(host, player));
+            let is_destroy = held
+                .as_ref()
+                .is_some_and(|(_, stack)| stack.item().id(host) == DESTROY_GADGET);
+            let state = held.map_or_else(GadgetState::default, |(_, stack)| read_state(&stack));
+            // The destruction gadget's readout names the planned cell count (0 before a plan).
+            // The building gadget's readout is the state string the component holds, so the
+            // cleaned selection (`cleanBlockState`) stays observable.
+            let line = if is_destroy {
+                runtime::destroy_status_reply(
+                    state.range,
+                    state.destroy_plan.as_ref().map(Vec::len),
+                )
+            } else {
+                runtime::status_reply(
+                    state.mode,
+                    state.range,
+                    state.selected.as_deref(),
+                    state.place_on_top,
+                )
+            };
             reply(host, player, line);
         }
         GadgetCommand::SetRange(value) => {
             let Some(player) = player else {
-                reply(
-                    host,
-                    None,
-                    "Hold the building gadget to set its range".to_owned(),
-                );
+                reply(host, None, "Hold a gadget to set its range".to_owned());
                 return Flow::Cancel;
             };
-            let Some(gadget) = held_gadget(host, player) else {
+            let Some(gadget) = held_any_gadget(host, player) else {
                 reply(
                     host,
                     Some(player),
-                    "Hold the building gadget to set its range".to_owned(),
+                    "Hold a gadget to set its range".to_owned(),
                 );
                 return Flow::Cancel;
             };
@@ -646,6 +808,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 selected: current.selected,
                 mode: current.mode,
                 place_on_top: current.place_on_top,
+                destroy_plan: current.destroy_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_range_reply(value));
@@ -673,6 +836,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 selected: current.selected,
                 mode,
                 place_on_top: current.place_on_top,
+                destroy_plan: current.destroy_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_mode_reply(mode));
@@ -700,6 +864,7 @@ pub fn run_command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) ->
                 selected: current.selected,
                 mode: current.mode,
                 place_on_top: enabled,
+                destroy_plan: current.destroy_plan,
             };
             write_held(host, player, &state);
             reply(host, Some(player), runtime::set_place_on_top_reply(enabled));
@@ -743,7 +908,8 @@ pub fn scroll(host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flo
     else {
         return Flow::Continue;
     };
-    if stack.item().id(host) != runtime::GADGET {
+    let id = stack.item().id(host);
+    if id != runtime::GADGET && id != DESTROY_GADGET {
         return Flow::Continue;
     }
     let state = read_state(&stack);

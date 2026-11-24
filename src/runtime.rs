@@ -16,6 +16,15 @@
 
 pub const GADGET: &str = "buildinggadgets2:gadget_building";
 
+/// The destruction gadget (slice 0.2.7): a second item that plans the cells a sneak
+/// click would clear, using the deny tag's other documented consumer.
+pub const DESTROY_GADGET: &str = "buildinggadgets2:gadget_destruction";
+
+/// `GadgetUtils.isValidDestroyBlockState` has four clauses; this pin can query three. There is no
+/// stamped block-class or `RenderBlock` query (and this port places no render block: the build is
+/// held), so that one line is `blocked(no-render-block-surface)` and the other three are carried.
+pub const NO_RENDER_BLOCK_SURFACE: &str = "no-render-block-surface";
+
 /// Upstream's `GadgetNBT.getToolRange` default: one block.
 pub const DEFAULT_RANGE: u32 = 1;
 /// Upstream's range slider (`ModeRadialMenu`) allows 1..=15.
@@ -141,6 +150,79 @@ pub fn selectable(
     !denied(in_deny_tag)
         && destroy_speed.is_some_and(|speed| speed >= 0.0)
         && fluid.is_none_or(|fluid| fluid.amount == 0 || fluid.source)
+}
+
+/// The three queryable facts `isValidDestroyBlockState` needs about one destination cell.
+/// The fourth (`RenderBlock`) has no stamped surface here — see [`NO_RENDER_BLOCK_SURFACE`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DestroyFacts {
+    /// `BlockState.isAir()`, answered by the block's id.
+    pub air: bool,
+    /// `BlockState.getDestroySpeed`: -1 for bedrock and other unbreakable blocks.
+    pub destroy_speed: Option<f32>,
+    /// The merged `buildinggadgets2:deny` tag's answer (None before tags load).
+    pub deny_tagged: Option<bool>,
+}
+
+/// The world view the destruction planner reads, one cell at a time.
+pub trait DestroyWorld {
+    fn facts(&mut self, pos: [i32; 3]) -> Option<DestroyFacts>;
+}
+
+/// `GadgetUtils.isValidDestroyBlockState` (`GadgetUtils.java:56-61`), plus the deny tag's
+/// destination clause the brief assigns to this gadget (`BG2DENY`'s other consumer).
+/// Air, an unbreakable block (`destroySpeed < 0`, bedrock in 26.3) and a deny-tag member are
+/// refused; a fact the host cannot answer (`None` destroy speed) is refused rather than guessed.
+/// The fourth Java clause (`instanceof RenderBlock`) has no stamped surface here and is
+/// [`NO_RENDER_BLOCK_SURFACE`] — it is not invented as a query.
+#[must_use]
+pub fn destroyable(facts: DestroyFacts) -> bool {
+    !facts.air
+        && facts.destroy_speed.is_some_and(|speed| speed >= 0.0)
+        && !denied(facts.deny_tagged)
+}
+
+/// The cells one destruction click plans: a single horizontal layer at the clicked block's
+/// height, `range` blocks out on both horizontal axes (upstream's five LEFT/RIGHT/UP/DOWN/DEPTH
+/// sliders expressed with this port's one `range`, depth fixed to one layer). Only cells whose
+/// block passes [`destroyable`] are planned; an unloaded or air cell is skipped, not stopped at.
+/// This is a **plan only** — the cell list is stored on the stack, nothing is removed.
+#[must_use]
+pub fn destroy_plan(world: &mut impl DestroyWorld, clicked: [i32; 3], range: u32) -> Vec<[i32; 3]> {
+    if range == 0 {
+        return Vec::new();
+    }
+    let reach = i32::try_from(range).unwrap_or(i32::MAX);
+    let mut cells = Vec::new();
+    for x in (clicked[0] - reach)..=(clicked[0] + reach) {
+        for z in (clicked[2] - reach)..=(clicked[2] + reach) {
+            let pos = [x, clicked[1], z];
+            if world.facts(pos).is_some_and(destroyable) {
+                cells.push(pos);
+            }
+        }
+    }
+    cells
+}
+
+/// The action bar line after a destruction plan is made: the count and the honest hold
+/// (the plan writes nothing, so 0 cells are removed).
+#[must_use]
+pub fn destroy_reply(count: usize) -> String {
+    let cells = if count == 1 { "cell" } else { "cells" };
+    format!(
+        "Destruction Gadget: planned {count} {cells}, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})"
+    )
+}
+
+/// The `/buildinggadgets2` status line while holding the destruction gadget. `None` is a gadget
+/// that has not planned yet, so its honest count is 0.
+#[must_use]
+pub fn destroy_status_reply(range: u32, planned: Option<usize>) -> String {
+    format!(
+        "Destruction Gadget: range {range}, planned {} cells, 0 removed (blocked: {NO_CANCELLABLE_PLACEMENT})",
+        planned.unwrap_or(0)
+    )
 }
 
 /// One property of a block's state as the game publishes it: its name and how many values it
@@ -1759,6 +1841,180 @@ mod tests {
                 "Building Gadget: mode grid, range 5, block {door}, place-on-top off, \
                  placement held (blocked: no-cancellable-placement)"
             )
+        );
+    }
+
+    // --- Slice 0.2.7: the destruction gadget's destination plan -----------------------
+
+    #[derive(Clone, Copy)]
+    struct CellFacts {
+        air: bool,
+        destroy_speed: Option<f32>,
+        deny_tagged: bool,
+    }
+
+    impl CellFacts {
+        fn stone() -> Self {
+            Self {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: false,
+            }
+        }
+        fn bedrock() -> Self {
+            Self {
+                air: false,
+                destroy_speed: Some(-1.0),
+                deny_tagged: false,
+            }
+        }
+        fn tagged() -> Self {
+            Self {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: true,
+            }
+        }
+        fn air() -> Self {
+            Self {
+                air: true,
+                destroy_speed: Some(0.0),
+                deny_tagged: false,
+            }
+        }
+    }
+
+    struct Grid {
+        cells: std::collections::BTreeMap<[i32; 3], CellFacts>,
+    }
+
+    impl DestroyWorld for Grid {
+        fn facts(&mut self, pos: [i32; 3]) -> Option<DestroyFacts> {
+            self.cells.get(&pos).map(|fact| DestroyFacts {
+                air: fact.air,
+                destroy_speed: fact.destroy_speed,
+                deny_tagged: Some(fact.deny_tagged),
+            })
+        }
+    }
+
+    #[test]
+    fn destroyable_refuses_air_and_unbreakable_but_takes_stone() {
+        assert!(
+            !destroyable(DestroyFacts {
+                air: CellFacts::air().air,
+                destroy_speed: Some(0.0),
+                deny_tagged: Some(false),
+            }),
+            "air cannot be destroyed"
+        );
+        assert!(
+            !destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(-1.0),
+                deny_tagged: Some(false),
+            }),
+            "bedrock's -1 destroy speed cannot be destroyed"
+        );
+        assert!(
+            destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: Some(false),
+            }),
+            "stone can be destroyed"
+        );
+    }
+
+    #[test]
+    fn a_deny_tag_member_cannot_be_destroyed() {
+        assert_eq!(DENY_TAG, "buildinggadgets2:deny");
+        assert!(
+            !destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: Some(true),
+            }),
+            "a tag member is refused even with a positive destroy speed"
+        );
+        assert!(
+            destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: Some(false),
+            }),
+            "untagged stone is the control"
+        );
+        assert!(
+            destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: None,
+            }),
+            "an unloaded tag table does not refuse"
+        );
+    }
+
+    #[test]
+    fn the_render_block_line_is_blocked_at_this_pin() {
+        assert_eq!(NO_RENDER_BLOCK_SURFACE, "no-render-block-surface");
+        assert!(
+            destroyable(DestroyFacts {
+                air: false,
+                destroy_speed: Some(1.5),
+                deny_tagged: Some(false),
+            }),
+            "the three queryable lines carry the plan while RenderBlock is blocked"
+        );
+    }
+
+    #[test]
+    fn destroy_plan_counts_only_destroyable_cells() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::tagged());
+        grid.cells.insert([2, 150, 0], CellFacts::bedrock());
+        grid.cells.insert([-1, 150, 0], CellFacts::stone());
+        grid.cells.insert([-2, 150, 0], CellFacts::stone());
+        let cells = destroy_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[-2, 150, 0], [-1, 150, 0], [0, 150, 0]],
+            "the tag member and the unbreakable block are excluded, two ordinary stones included"
+        );
+    }
+
+    #[test]
+    fn destroy_plan_with_ordinary_stones_includes_both() {
+        let mut grid = Grid {
+            cells: std::collections::BTreeMap::new(),
+        };
+        grid.cells.insert([0, 150, 0], CellFacts::stone());
+        grid.cells.insert([1, 150, 0], CellFacts::stone());
+        grid.cells.insert([2, 150, 0], CellFacts::stone());
+        let cells = destroy_plan(&mut grid, [0, 150, 0], 5);
+        assert_eq!(
+            cells,
+            vec![[0, 150, 0], [1, 150, 0], [2, 150, 0]],
+            "the same rig with two ordinary stones includes both"
+        );
+    }
+
+    #[test]
+    fn destroy_reply_and_status_name_the_planned_count() {
+        assert_eq!(
+            destroy_reply(3),
+            "Destruction Gadget: planned 3 cells, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            destroy_status_reply(5, Some(3)),
+            "Destruction Gadget: range 5, planned 3 cells, 0 removed (blocked: no-cancellable-placement)"
+        );
+        assert_eq!(
+            destroy_status_reply(5, None),
+            "Destruction Gadget: range 5, planned 0 cells, 0 removed (blocked: no-cancellable-placement)"
         );
     }
 }

@@ -39,6 +39,17 @@
 #     (`lit=false`) while `facing=west` survives; the status reply names the stored state string;
 #   * `clean_transient` — a ripe `minecraft:wheat[age=7]` is stored as `age=0`.
 #
+# Two destruction-gadget phases close the destination-plan family (slice 0.2.7):
+#
+#   * `destroy_refusals` — a sneak click beside the clicked stone plans only the stone:
+#     a `minecraft:piston_head` (carried deny tag member) and a `minecraft:bedrock`
+#     (`destroy_speed -1`) in the planned layer are both excluded;
+#   * `destroy_control` — the same rig with two ordinary stones plans all three.
+#
+#   The pair makes an always-false and an always-true tag/speed read fail. The parsed
+#   `/buildinggadgets2` reply names the count, and neither rig removes a block. `SELFTEST`
+#   inverts the count in both directions (1->3 and 3->1).
+#
 #   GAME=<launcher-built horizon-client> tools/e2e.sh
 #   GAME=$CONTROL_GAME tools/e2e.sh          # same Nightly, no package: the gadget
 #                                            # id is unknown -> FAIL, EXIT:1
@@ -66,7 +77,8 @@ SOCK=${SOCK:-$TMP/buildinggadgets2-modes.sock}
 SELFTEST=${SELFTEST:-0}
 WORLD=${WORLD:-BuildingGadgets2Modes}
 TOOL=buildinggadgets2:gadget_building
-PHASES=16
+DESTROY_TOOL=buildinggadgets2:gadget_destruction
+PHASES=18
 HELD="Building Gadget: held (blocked: no-cancellable-placement)"
 # A carried `buildinggadgets2:deny` member whose other selection clauses all pass, so only the
 # tag can refuse it: destroy speed 1.5 (> 0), no fluid, block item air.
@@ -569,6 +581,83 @@ clean_transient_phase() {
         || phase_fail "$name: the status reply was '$reply', expected '$want'"
 }
 
+# The destruction gadget's destination plan. `rejected` puts a deny-tag member and an
+# unbreakable block beside the clicked stone; `control` puts two ordinary stones there.
+# The parsed status count is the assertion, and the rig blocks are read back afterwards so
+# the slice cannot pass by quietly removing them.
+destroy_phase() {
+    local name=$1 want=$2
+    local reply cell_a cell_b plan_want status_want held
+    local material_a=minecraft:piston_head material_b=minecraft:bedrock
+
+    echo "== destruction phase $name: two cells beside the clicked stone, $want planned =="
+    PHASE_REJECTED=0
+    reset_stage
+    # The plan is one whole y=150 layer: clear it first so the count cannot include a
+    # block another phase left behind.
+    ctl fill -8 150 -8 8 150 8 minecraft:air >/dev/null
+    ctl fill 0 150 0 0 150 0 minecraft:stone >/dev/null
+    if [ "$name" = "destroy_control" ]; then
+        material_a=minecraft:stone
+        material_b=minecraft:stone
+    fi
+    ctl setblock 1 150 0 "$material_a" >/dev/null
+    ctl setblock 2 150 0 "$material_b" >/dev/null
+    ctl wait 3
+    cell_a=$(block_at 1 150 0)
+    cell_b=$(block_at 2 150 0)
+    echo "  cells (1,150,0) and (2,150,0): $cell_a, $cell_b"
+    [ "$cell_a" = "$material_a" ] && [ "$cell_b" = "$material_b" ] \
+        || phase_fail "$name: the rig cells are '$cell_a' and '$cell_b', expected $material_a and $material_b"
+
+    # A give lands in the first free slot of the whole inventory; earlier phases can leave
+    # the hotbar full, so clear it first — `ctl select` only accepts a hotbar slot.
+    ctl command "clear @s" >/dev/null
+    ctl wait 2
+    ctl give "$DESTROY_TOOL" 1 >/dev/null || fail "the package did not provide $DESTROY_TOOL"
+    ctl wait 2
+    ctl select "$DESTROY_TOOL" >/dev/null || fail "cannot select $DESTROY_TOOL"
+    ctl wait 2
+    held=$(ctl inventory | jq -r '.held.item // "none"')
+    [ "$held" = "$DESTROY_TOOL" ] \
+        || phase_fail "$name: the held item is $held, expected $DESTROY_TOOL"
+
+    # The range belongs to the destruction gadget's own component, so set it while it is held.
+    reply=$(command_reply "/buildinggadgets2 range 5")
+    [ "$reply" = "Building Gadget range set to 5" ] \
+        || phase_fail "$name: the range reply was '$reply'"
+
+    select_at 0 150 0 south
+    reply=$(actionbar)
+    echo "  plan reply: $reply"
+    plan_want="Destruction Gadget: planned $want cells, 0 removed (blocked: no-cancellable-placement)"
+    if [ "$want" -eq 1 ]; then
+        plan_want="Destruction Gadget: planned 1 cell, 0 removed (blocked: no-cancellable-placement)"
+    fi
+    [ "$reply" = "$plan_want" ] \
+        || phase_fail "$name: the plan reply was '$reply', expected '$plan_want'"
+
+    reply=$(command_reply "/buildinggadgets2")
+    echo "  status: $reply"
+    status_want="Destruction Gadget: range 5, planned $want cells, 0 removed (blocked: no-cancellable-placement)"
+    if [ "$SELFTEST" = 1 ]; then
+        # Invert the count in both directions: the refused rig claims 3, the control rig 1.
+        if [ "$name" = "destroy_control" ]; then
+            status_want="Destruction Gadget: range 5, planned 1 cells, 0 removed (blocked: no-cancellable-placement)"
+        else
+            status_want="Destruction Gadget: range 5, planned 3 cells, 0 removed (blocked: no-cancellable-placement)"
+        fi
+    fi
+    [ "$reply" = "$status_want" ] \
+        || phase_fail "$name: the status reply was '$reply', expected '$status_want'"
+
+    # The plan is a plan only: neither rig lost a block.
+    cell_a=$(block_at 1 150 0)
+    cell_b=$(block_at 2 150 0)
+    [ "$cell_a" = "$material_a" ] && [ "$cell_b" = "$material_b" ] \
+        || phase_fail "$name: the plan removed a block ($cell_a, $cell_b)"
+}
+
 
 echo "== launch (survival world $WORLD; the package is installed in the instance) =="
 launch "$WORLD"
@@ -585,11 +674,32 @@ ctl fill 0 150 0 0 150 0 minecraft:stone
 ctl tp 0 150 4
 ctl wait 2
 
+echo "== the destruction gadget id resolves only with the package =="
+if ctl give "$DESTROY_TOOL" 1 >/dev/null 2>&1; then
+    ctl wait 2
+    got=$(ctl inventory | jq -r '[.counts["'"$DESTROY_TOOL"'"] // 0] | add')
+    if [ "$got" -ge 1 ]; then
+        echo "  $DESTROY_TOOL resolved (packaged game), count $got"
+    else
+        fail "the destruction gadget id $DESTROY_TOOL was not added to the inventory"
+    fi
+    ctl command "clear @s" >/dev/null
+    ctl wait 2
+else
+    fail "the destruction gadget id $DESTROY_TOOL is unknown (control game without the package)"
+fi
+
 echo "== the carried gadget recipe crafts in a real crafting table =="
 ctl setblock 3 150 4 minecraft:crafting_table
 ctl wait 2
 python3 "$PORT/tools/craft_gadget.py" "$SOCK" "$CTL" 3 150 4 \
     || fail "the carried gadget recipe did not craft (or its control matched)"
+
+echo "== the carried destruction gadget recipe crafts in a real crafting table =="
+ctl setblock 3 150 4 minecraft:crafting_table
+ctl wait 2
+python3 "$PORT/tools/craft_destruction.py" "$SOCK" "$CTL" 3 150 4 \
+    || fail "the carried destruction gadget recipe did not craft (or its control matched)"
 ctl command "clear @s"
 ctl wait 2
 ctl tp 0 150 4
@@ -646,6 +756,11 @@ deny_destination_phase deny_destination 6
 clean_selection_phase
 clean_transient_phase
 
+# The destruction gadget's destination plan: two rigs whose counts differ by exactly the
+# refused pair (the deny-tag piston head and the unbreakable bedrock).
+destroy_phase destroy_refusals 1
+destroy_phase destroy_control 3
+
 
 if [ "$SELFTEST" = 1 ]; then
     [ "$REJECTED_PHASES" -ge "$PHASES" ] \
@@ -654,4 +769,4 @@ if [ "$SELFTEST" = 1 ]; then
     exit 1
 fi
 
-echo "PASS: the carried recipe crafted one gadget with its ingredients consumed (a missing lapis matched nothing); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag; and the selection stored upstream's cleaned state: a lit furnace kept facing=west and dropped lit=true, and a ripe wheat was stored as age=0 (the status reply named both)"
+echo "PASS: both carried recipes crafted one gadget each with their ingredients consumed (a missing lapis matched nothing in each); all 9 modes held the build with the exact upstream cell count, 0 blocks written and 0 stone spent; the world border's upper edge refused the cell exactly on it while allowing it one cell inside; the carried buildinggadgets2:deny tag refused a sneak click on minecraft:piston_head (leaving minecraft:stone selected) while its destination rule counted 8 cells with ordinary snow and 6 once the test world named snow in the tag; the selection stored upstream's cleaned state: a lit furnace kept facing=west and dropped lit=true, and a ripe wheat was stored as age=0; and the destruction gadget's parsed status named 1 planned cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, 0 removed in both, with the RenderBlock line recorded blocked(no-render-block-surface)"

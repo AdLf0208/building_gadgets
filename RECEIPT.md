@@ -1,11 +1,11 @@
-# Package receipt — buildinggadgets2 0.2.6
+# Package receipt — buildinggadgets2 0.2.7
 
 | field | value |
 |---|---|
-| version | `0.2.6` |
+| version | `0.2.7` |
 | file | `buildinggadgets2.hmod` |
-| bytes | 48,042 |
-| sha256 | `6885766f687e20941f3538a5576bfdf3a31ee5e97bcc41f18c15c23b08d0c857` |
+| bytes | 57,068 |
+| sha256 | `a506d017e78f5e05781ad68870836e7c9d39dc044b00f4a5522ef3948146e81f` |
 | source | this tag — the tree here is the source that produced the archive |
 | game | 26.3 |
 | horizon | `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` |

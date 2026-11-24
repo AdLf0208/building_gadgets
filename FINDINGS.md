@@ -140,3 +140,33 @@ based on the direction they are looking … useful for building bridges."
   protection has no pin API.
 - Item payment uses `native_count_items`/`native_take_items` (plain stacks
   only), one item per placed cell.
+
+## Slice 6 — the destruction gadget's destination rule (2026-11-24)
+
+Source read from the same `1.21.1` clone (`11cd2efb…`) and the 1.3.9 jar:
+
+- `common/items/GadgetDestruction.java:70-108`: `use` → `onShiftAction` (a
+  client-only screen) or `onAction`; `onAction` builds `destroyPosList` from
+  `GadgetUtils.getDestructionArea`, sorts it by distance to the player and hands
+  it to `BuildingUtils.removeTickHandler` — the write this port's hold withholds.
+- `util/GadgetUtils.java:56-61`: `isValidDestroyBlockState` refuses air, a block
+  whose `getDestroySpeed < 0`, and `instanceof RenderBlock`. It does **not** read
+  the deny tag. The brief assigns the deny tag's destination clause to this
+  gadget as its other documented consumer, so the port adds that refusal.
+- `util/GadgetUtils.java:152-185`: `getDestructionArea` builds an AABB from the
+  gadget's LEFT/RIGHT/UP/DOWN/DEPTH integer settings (depth along the clicked
+  face), skips cells `mayInteract` or a `BreakEvent` vetoes, skips block entities
+  unless the tile toggle is on, then applies `isValidDestroyBlockState`.
+- The jar's `data/buildinggadgets2/recipe/gadget_destruction.json` is
+  `iri / ere / ili` over the `c:` iron/redstone/ender-pearl/lapis tags. The port
+  resolves those tags to concrete items, as it did for the building recipe.
+
+### Where the rewrite differs
+
+- One `range` stands in for the five sliders; the plan is a single horizontal
+  layer at the clicked block's height, ±range on x and z (depth 1).
+- The pin has no stamped block-class or `RenderBlock` query and the port places
+  no render block (the build is held), so that refusal is
+  `blocked(no-render-block-surface)`; the other three are carried.
+- The plan is stored on the stack and read back by `/buildinggadgets2`; no block
+  is removed and no item is refunded (there is no undo list here).

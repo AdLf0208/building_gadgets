@@ -7,7 +7,7 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "buildinggadgets2"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 license = "MIT"
 description = "Building Gadgets 2 for Horizon: the building gadget, its eight modes and its held build"

@@ -33,18 +33,19 @@ against the pinned game build; the SDK in `.horizon/sdk/` is fetched by
 `cargo horizon-mod` and never packed.
 
 ```text
-horizon-mod.toml               id, version 0.2.6, api 0.2, side both, [native] pins
+horizon-mod.toml               id, version 0.2.7, api 0.2, side both, [native] pins
 Cargo.toml                     one crate; the only dependency is horizon-mod-api
 src/lib.rs                     the one `impl Hooks` (register, component_types, commands, wheel)
-src/support.rs                 game glue: component, inventory, the cleaned selection, commands, wheel
-src/runtime.rs                 pure mode planners, the selection rules (deny tag, cleanBlockState), the placement hold, the border gate (47 tests)
-assets/buildinggadgets2/       item definition, model, texture, lang
-data/buildinggadgets2/         item behaviour row, recipe, advancement, tab, the deny tag
+src/support.rs                 game glue: component, inventory, the cleaned selection, the destruction plan, commands, wheel
+src/runtime.rs                 pure mode planners, the selection rules (deny tag, cleanBlockState), the destruction destination rule and plan, the placement hold, the border gate (53 tests)
+assets/buildinggadgets2/       item definitions, models, textures, lang (both gadgets)
+data/buildinggadgets2/         item behaviour rows, recipes, advancements, tab, the deny tag
 LICENSE, LICENSE-NOTICE.md     the MIT text and where the port came from (packed)
 icon.png                       optional package icon (packed)
 buildinggadgets2.hmod          the delivered package
-tools/e2e.sh                   fail-capable in-game check (recipe, every mode, borders, the deny tag, the cleaned selection)
-tools/craft_gadget.py          crafts the carried recipe in a real crafting table
+tools/e2e.sh                   fail-capable in-game check (both recipes, every mode, borders, the deny tag, the cleaned selection, the destruction plan)
+tools/craft_gadget.py          crafts the carried building recipe in a real crafting table
+tools/craft_destruction.py     crafts the carried destruction recipe in a real crafting table
 notes.md, FINDINGS.md, VALIDATION.md, REPIN-AUDIT.md
 ```
 
@@ -54,7 +55,7 @@ Run these in the port; the SDK layout needs no staging (`CARGO_INCREMENTAL=0`,
 no `--target-dir`).
 
 ```sh
-CARGO_INCREMENTAL=0 cargo test                            # 47 runtime tests
+CARGO_INCREMENTAL=0 cargo test                            # 53 runtime tests
 CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
 cargo fmt --check                                          # NOT --all: it would format the SDK
 rm -f Cargo.lock                                           # a packed lock changes the artifact

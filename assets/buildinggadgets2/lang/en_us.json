@@ -1,5 +1,6 @@
 {
   "item.buildinggadgets2.gadget_building": "Building Gadget",
+  "item.buildinggadgets2.gadget_destruction": "Destruction Gadget",
   "itemGroup.buildinggadgets2": "Building Gadgets 2",
   "buildinggadgets2.modes.build_to_me": "Build to Me",
   "buildinggadgets2.modes.grid": "Grid",

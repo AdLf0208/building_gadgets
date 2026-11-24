@@ -1515,3 +1515,165 @@ delivered.
 > the clicked state asserted first, and 0.2.5's raw state is the inverted expectation every phase
 > rejects. The build stays held (`blocked: no-cancellable-placement`), the preview stays
 > `blocked(no-client-held-stack-components)`, and the other gaps are unchanged.
+
+## Slice 6 — the destruction gadget's destination plan (2026-11-24, version 0.2.7)
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+**Gap it closes.** `### Coverage — every family in the jar (0.2.6)`:
+*"paste/rotate/cut/destruction/exchange gadgets | not ported — later slices (the exchange gadget is the tag's other consumer)"*.
+Destruction is picked because the deny tag (0.2.5) is its other documented consumer and the
+0.2.4 hold lets it land as a **plan + readout only**: a new item, a `gadget_state` field and a
+pure planner, with no block removal. Class content, tier deep; no write hook is called.
+
+### The four refusal rules, and what the pin can actually query
+
+From `GadgetUtils.isValidDestroyBlockState` (`:56-61`) plus the campaign's deny-tag clause:
+
+| Rule | Pin query | Verdict |
+|---|---|---|
+| air refused | `BlockMetadata::name(state.block())` -> `minecraft:air`/`cave_air`/`void_air` (stamped, same read `selectable` uses) | **carried** |
+| `destroy_speed < 0` refused | `BlockStates::destroy_speed(state)` -> `Backend::block_state_destroy_speed` #279 (stamped; 26.3 reports bedrock -1, stone 1.5) | **carried** |
+| deny-tag member refused | `Host::block_in_tag(state.block(), "buildinggadgets2:deny")` #69 (stamped; the merged tag, so data packs count) | **carried** |
+| `RenderBlock` refused | no stamped block-class / render-block surface exists at `0a875da`, and this port places no render block (the build is held). No query was invented. | **`blocked(no-render-block-surface)`** for this line only |
+
+The three queryable lines are the whole `destroyable` predicate (`runtime.rs`); the fourth is
+recorded, not faked. Upstream's `getDestructionArea` also consults `mayInteract` and a
+`BreakEvent`; those remain under the building gadget's hold (`no-cancellable-placement`).
+
+### What shipped
+
+1. **`runtime`:** `DESTROY_GADGET`, `NO_RENDER_BLOCK_SURFACE`, `DestroyFacts`, `DestroyWorld`,
+   `destroyable` (three carried clauses), `destroy_plan` (one y-layer, ±range on x and z,
+   keeping only destroyable cells), `destroy_reply` and `destroy_status_reply`.
+2. **`support`:** `LevelDestroyWorld` reads the three facts through the stamped host calls;
+   a sneak click with the destruction gadget stores `destroy_plan: Option<Vec<[i32;3]>>` in the
+   `buildinggadgets2:gadget_state` component and answers the count on the action bar; a plain
+   click writes nothing. The status command prints the count while that gadget is held, and the
+   range command/wheel accept either gadget. The building gadget's replies are unchanged.
+3. **Content:** `gadget_destruction` item, its recipe (`iri/ere/ili` with the jar's `c:` tags
+   resolved to concrete items, as the building recipe does), advancement, model, the jar's own
+   16×16 texture (sha `85a0f235…`, byte-identical to the jar), lang and the creative tab.
+
+**Red → green (unit).** Six new tests were run first against stubs (`destroyable -> false`,
+`destroy_plan -> Vec::new()`, both replies `""`), from
+`ports/_shared/evidence/buildinggadgets2/sdk-test-red-0.2.7-destroy.log` (`EXIT:101`), **47 passed,
+6 failed**. The headline failure:
+
+```
+---- runtime::tests::destroy_plan_counts_only_destroyable_cells stdout ----
+thread 'runtime::tests::destroy_plan_counts_only_destroyable_cells' (22706) panicked at src/runtime.rs:1936:9:
+assertion `left == right` failed: the tag member and the unbreakable block are excluded, two ordinary stones included
+  left: []
+ right: [[-2, 150, 0], [-1, 150, 0], [0, 150, 0]]
+```
+
+Green: **53 passed, 0 failed** (`sdk-test.log`). The new tests are
+`destroyable_refuses_air_and_unbreakable_but_takes_stone`, `a_deny_tag_member_cannot_be_destroyed`,
+`the_render_block_line_is_blocked_at_this_pin`, `destroy_plan_counts_only_destroyable_cells`,
+`destroy_plan_with_ordinary_stones_includes_both` and `destroy_reply_and_status_name_the_planned_count`.
+
+### In game (fail-capable)
+
+Two phases in `tools/e2e.sh`, one at (1,150,0) and one at (2,150,0) beside the clicked stone at
+(0,150,0); the whole y=150 layer is cleared first so a previous phase cannot leak a block into
+the count. Both rigs are read back before the click and again after it, and the unknown gadget
+id is refused on the control game before any recipe runs.
+
+```
+== destruction phase destroy_refusals: two cells beside the clicked stone, 1 planned ==
+  cells (1,150,0) and (2,150,0): minecraft:piston_head, minecraft:bedrock
+  plan reply: Destruction Gadget: planned 1 cell, 0 removed (blocked: no-cancellable-placement)
+  status: Destruction Gadget: range 5, planned 1 cells, 0 removed (blocked: no-cancellable-placement)
+== destruction phase destroy_control: two cells beside the clicked stone, 3 planned ==
+  cells (1,150,0) and (2,150,0): minecraft:stone, minecraft:stone
+  plan reply: Destruction Gadget: planned 3 cells, 0 removed (blocked: no-cancellable-placement)
+  status: Destruction Gadget: range 5, planned 3 cells, 0 removed (blocked: no-cancellable-placement)
+PASS: … the destruction gadget's parsed status named 1 planned cell with a deny-tag piston head and a -1-destroy-speed bedrock beside the click, 3 with two ordinary stones there, 0 removed in both …
+EXIT:0
+```
+
+The pair is the proof: a read that always refuses the tag/speed reports 3 in the first rig, and
+one that always accepts them reports 1 in the control rig. `SELFTEST=1` swaps both expectations
+(1->3 and 3->1), so one run proves both directions reject. The carried destruction recipe is
+crafted with all four ingredients consumed (and a lapis-free control matches nothing), and the
+control game refuses `buildinggadgets2:gadget_destruction` as an unknown id.
+
+### Coverage — every family in the jar (0.2.7)
+
+Replaces the 0.2.6 table; unchanged rows keep their verdicts.
+
+| Family | Status |
+|---|---|
+| the eight building modes, place-on-top, borders, per-cell gate | tested — phases as in 0.2.6, 0 written, 0 spent |
+| `cleanBlockState` — denied/kept properties, `age` instances | tested — `clean_selection`, `clean_transient` and the six unit tests |
+| `buildinggadgets2:deny` — selection and build destination | tested — `deny_selection`, `deny_destination_control` (8), `deny_destination` (6) |
+| the building gadget's status readout | tested — names the cleaned state string |
+| carried building recipe | tested — crafted, ingredients consumed, missing-lapis control empty |
+| **carried destruction recipe** | tested — crafted, iron×4/redstone×2/ender pearl×2/lapis×1 consumed, missing-lapis control empty |
+| **destruction destination — air** | unit tested — `destroyable_refuses_air_and_unbreakable_but_takes_stone` |
+| **destruction destination — `destroy_speed < 0`** | tested — phase `destroy_refusals` (`minecraft:bedrock` excluded) |
+| **destruction destination — deny tag** | tested — phase `destroy_refusals` (`minecraft:piston_head` excluded), control phase includes two stones |
+| **destruction destination — `RenderBlock`** | `blocked(no-render-block-surface)` — no stamped surface; the other three lines carried |
+| **destruction plan readout** | tested — parsed plan and status counts in both rigs; `SELFTEST` inverts both |
+| **destruction gadget id** | tested — resolved in the packaged game, refused in the control |
+| the block writes and the item payment | **held** — `blocked(no-cancellable-placement)`; every phase asserts 0 written and 0 spent |
+| block removal, undo list, destruction energy and range screen | not ported — this is a plan + readout slice; `removeTickHandler` is not called |
+| paste/rotate/cut/exchange gadgets, anchor, GUI, wheel screen | not ported — later slices |
+| preview | `blocked(no-client-held-stack-components)` — unchanged |
+
+### Gaps (0.2.7)
+
+The 0.2.6 list holds with one new family and one closure: the destruction destination plan is
+carried (with its RenderBlock line `blocked(no-render-block-surface)`); the actual removal, undo
+list, destruction energy and range screen are not. The build stays held
+(`blocked: no-cancellable-placement`), the preview stays
+`blocked(no-client-held-stack-components)`, and the other gadgets are unchanged.
+
+### Verification (0.2.7)
+
+| Check | Result |
+|---|---|
+| `cargo test` | **53 passed**, 0 failed (`sdk-test.log`; red first: `sdk-test-red-0.2.7-destroy.log`, 47/6, `EXIT:101`) |
+| `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0 / exit 0 (`sdk-clippy.log`, `sdk-fmt.log`) |
+| `cargo horizon-mod build` twice, `rm -f Cargo.lock` before each | **57,068 B**, `cmp` identical (`sdk-build.log`, `sdk-build2.log`) |
+| `cargo horizon-mod check` | `buildinggadgets2 0.2.7 (native-mod, format native-1/0a875da…/e59da909…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| `fits --build 0a875da…` | `0a875da  made for` (`sdk-fits.log`) |
+| `fits --build 0b14f8a…` | `0b14f8a  fits` — a different build, so the pin run is not a tautology (`sdk-fits-other.log`) |
+| `verify-sdk-package.py buildinggadgets2` | 1/1, `package matches the tree` |
+| `check-recipe-types.py buildinggadgets2` | `buildinggadgets2: ok`, exit 0 |
+| `launcher-game.sh build buildinggadgets2` | `Compiling buildinggadgets2 (1 of 1)` after removing the stale `native-*` tags carrying this mod (`launcher-build-0.2.7.log`) |
+| e2e (modded, 18 phases) | `PASS` + `EXIT:0` (`e2e-destroy.log`) |
+| e2e (control, same Nightly without the package) | `FAIL: the destruction gadget id … is unknown` + `EXIT:1` (`e2e-destroy-control.log`) |
+| e2e (`SELFTEST=1`) | all 18 phases rejected the inverted expectations (34 assertions), `FAIL` + `EXIT:1`; both destruction phases swap 1↔3 (`e2e-destroy-selftest.log`) |
+| `check-e2e-logs.py buildinggadgets2-e2e --strict` | **13/13** — the 10 earlier legs stay green |
+| `check-skills.py --notes ports/buildinggadgets2` | `Skills:` line present |
+
+**Package.** `buildinggadgets2.hmod` **57,068 B**, sha256
+`a506d017e78f5e05781ad68870836e7c9d39dc044b00f4a5522ef3948146e81f`, **25 entries** (the six
+new destruction files included: item, model, texture, data item, recipe, advancement), no packed
+`Cargo.lock`; declared version **0.2.7**; `src/runtime.rs` sha256 `21437f145fd5…` in the tree and
+in the archive. The game leg was rebuilt from this tree after the docs were written
+(`Compiling buildinggadgets2 (1 of 1)`), so the bytes under test are the bytes delivered.
+
+### The defect found while adding the leg (fixed, not reproduced)
+
+The first in-game run planned nothing because `write_held` still filtered to the building gadget
+(`held_gadget`), so neither the range command nor the plan write reached the destruction stack.
+After the fix (`held_any_gadget`) the probe confirmed the component on the held destruction
+stack reads `range:5` and the status names the plan. The range command is now issued **after**
+the destruction gadget is selected — setting it while the building gadget is still held writes
+that stack instead. Both were harness/code defects of this slice, proved by the red leg and the
+green pair; neither is a Java-mod defect.
+
+### Changelog (0.2.7)
+
+> **Building Gadgets 2 0.2.7** — the destruction gadget is carried: its item, recipe and a sneak
+> click destination plan. The plan refuses air, a `destroy_speed < 0` block (bedrock) and a
+> `buildinggadgets2:deny` member (piston head), stores its cells in `gadget_state` and names the
+> count in `/buildinggadgets2`; upstream's `RenderBlock` clause is
+> `blocked(no-render-block-surface)` (no stamped query) and remains a recorded line only. The
+> parsed in-game pair is 1 planned cell with the two refused blocks beside the click and 3 with
+> two ordinary stones there, 0 removed in both. The build stays held
+> (`blocked: no-cancellable-placement`) and the preview stays
+> `blocked(no-client-held-stack-components)`.
